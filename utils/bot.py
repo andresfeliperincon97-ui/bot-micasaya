@@ -227,8 +227,15 @@ def ejecutar_fase2_desde_sheets(marcadas, config, callback=None):
             # Esperar redirección
             time.sleep(6)
             current_url = page.url
+            try:
+                titulo = page.title()
+                html_preview = page.content()[:500]
+            except Exception:
+                titulo = ""
+                html_preview = ""
             if callback:
-                callback(0, len(marcadas), None, f"URL tras login: {current_url}")
+                callback(0, len(marcadas), None, f"URL: {current_url} | Titulo: {titulo}")
+                callback(0, len(marcadas), None, f"HTML: {html_preview[:200]}")
 
             login_exitoso = (
                 "cifin" in current_url or
