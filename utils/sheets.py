@@ -1,10 +1,23 @@
-﻿import gspread
+import gspread
 from google.oauth2.service_account import Credentials
 
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets","https://www.googleapis.com/auth/drive"]
 
-def conectar_sheets(ruta_credenciales, sheet_id):
-    creds = Credentials.from_service_account_file(ruta_credenciales, scopes=SCOPES)
+def conectar_sheets(ruta_credenciales=None, sheet_id=None):
+    """Conecta a Sheets. Si ruta_credenciales es None, usa st.secrets (nube)."""
+    try:
+        import streamlit as st
+        if "gcp_service_account" in st.secrets:
+            creds_dict = dict(st.secrets["gcp_service_account"])
+            creds = Credentials.from_service_account_info(creds_dict, scopes=SCOPES)
+            if not sheet_id:
+                sheet_id = st.secrets.get("SPREADSHEET_ID", "")
+        else:
+            creds = Credentials.from_service_account_file(ruta_credenciales, scopes=SCOPES)
+    except Exception:
+        # Modo local sin streamlit
+        creds = Credentials.from_service_account_file(ruta_credenciales, scopes=SCOPES)
+
     cliente = gspread.authorize(creds)
     return cliente.open_by_key(sheet_id)
 
