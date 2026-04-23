@@ -195,13 +195,36 @@ def ejecutar_fase2_desde_sheets(marcadas, config, callback=None):
             page.wait_for_load_state("networkidle", timeout=15000)
 
             # Llenar credenciales
-            page.fill("input[placeholder='Usuario'], input[type='text']", usuario)
+            page.wait_for_selector("input[type='text'], input[placeholder='Usuario']", timeout=15000)
+            page.fill("input[type='text']", usuario)
             time.sleep(0.5)
             page.fill("input[type='password']", password)
             time.sleep(0.5)
-            page.click("button[type='submit'], button:has-text('Iniciar')")
+
+            # Clic en botón de login — probar múltiples selectores
+            clicked = False
+            for selector in [
+                "button:has-text('Iniciar sesión')",
+                "button:has-text('Iniciar')",
+                "button[type='submit']",
+                "input[type='submit']",
+                ".btn-primary",
+                "button"
+            ]:
+                try:
+                    page.click(selector, timeout=3000)
+                    clicked = True
+                    break
+                except Exception:
+                    continue
+
+            if not clicked:
+                if callback:
+                    callback(0, len(marcadas), None, f"ERROR: No se encontró el botón de login. URL: {page.url}")
+                return resultados
 
             # Esperar redirección
+            time.sleep(5)
             page.wait_for_url("**/cifin/**", timeout=20000)
 
             if "cifin" not in page.url:
