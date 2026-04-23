@@ -170,6 +170,11 @@ def login_transunion_selenium(usuario, password, callback=None):
     opts.add_argument("--disable-gpu")
     opts.add_argument("--window-size=1280,800")
     opts.add_argument("--disable-blink-features=AutomationControlled")
+    opts.add_argument("--shm-size=2gb")
+    opts.add_argument("--disable-setuid-sandbox")
+    opts.add_argument("--single-process")
+    opts.add_argument("--no-zygote")
+    opts.add_argument("--disable-features=VizDisplayCompositor")
     opts.add_experimental_option("excludeSwitches", ["enable-automation"])
     opts.add_experimental_option("useAutomationExtension", False)
 
