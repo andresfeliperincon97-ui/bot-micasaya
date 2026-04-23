@@ -1,0 +1,13 @@
+﻿# Archivos sensibles - nunca subir
+credenciales_google.json
+config.json
+resultados.json
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.env
+
+# Carpeta de cache
+.streamlit/secrets.toml
