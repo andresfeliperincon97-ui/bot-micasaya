@@ -190,27 +190,36 @@ def ejecutar_fase2_desde_sheets(marcadas, config, callback=None):
             if callback:
                 callback(0, len(marcadas), None, "Iniciando sesión en TransUnion...")
 
-            login_url = f"{TRANSUNION_BASE}/nidp/idff/sso?id=MiPortafolioContract&sid=0&option=credential&sid=0&target=https%3A%2F%2Fmiportafolio.transunion.co%2Fcifin"
+            # URL directa al login standalone que usa TransUnion
+            login_url = "https://miportafolio.transunion.co/nidp/app/login?sid=0&sid=0&uiDestination=contentDiv&isStandalone=true"
             page.goto(login_url, timeout=30000)
             page.wait_for_load_state("networkidle", timeout=15000)
 
             # Llenar credenciales
-            page.wait_for_selector("input[type='text'], input[placeholder='Usuario']", timeout=15000)
-            page.fill("input[type='text']", usuario)
-            time.sleep(0.5)
-            page.fill("input[type='password']", password)
+            page.wait_for_selector("input", timeout=15000)
+            time.sleep(2)
+
+            # Buscar campo usuario
+            for sel in ["input[placeholder='Usuario']", "input[name='username']", "input[name='Ecom_User_ID']", "input[type='text']"]:
+                try:
+                    page.fill(sel, usuario)
+                    break
+                except Exception:
+                    continue
             time.sleep(0.5)
 
-            # Clic en botón de login — probar múltiples selectores
+            # Buscar campo password
+            for sel in ["input[type='password']", "input[name='password']", "input[name='Ecom_Password']"]:
+                try:
+                    page.fill(sel, password)
+                    break
+                except Exception:
+                    continue
+            time.sleep(0.5)
+
+            # Clic en botón de login
             clicked = False
-            for selector in [
-                "button:has-text('Iniciar sesión')",
-                "button:has-text('Iniciar')",
-                "button[type='submit']",
-                "input[type='submit']",
-                ".btn-primary",
-                "button"
-            ]:
+            for selector in ["button:has-text('Iniciar sesión')", "button:has-text('Iniciar')", "button:has-text('Login')", "button[type='submit']", "input[type='submit']", ".btn-primary", "button"]:
                 try:
                     page.click(selector, timeout=3000)
                     clicked = True
@@ -220,7 +229,7 @@ def ejecutar_fase2_desde_sheets(marcadas, config, callback=None):
 
             if not clicked:
                 if callback:
-                    callback(0, len(marcadas), None, f"ERROR: No se encontró el botón de login. URL: {page.url}")
+                    callback(0, len(marcadas), None, f"ERROR: No se encontró el botón de login")
                 return resultados
 
             # Esperar redirección — TransUnion puede redirigir a varias URLs
