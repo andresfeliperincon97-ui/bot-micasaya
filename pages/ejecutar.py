@@ -25,22 +25,35 @@ def guardar_resultados(resultados):
     with open(RESULTADOS_FILE, "w") as f:
         json.dump(datos, f, ensure_ascii=False, indent=2)
 
+def _tiene_credenciales_nube():
+    """Detecta si hay credenciales en st.secrets o variables de entorno."""
+    # Railway
+    if os.environ.get("GCP_SERVICE_ACCOUNT"):
+        return True
+    # Streamlit Cloud
+    try:
+        import streamlit as st
+        return "gcp_service_account" in st.secrets
+    except Exception:
+        return False
+
 def obtener_cedulas(config):
-    if config.get("usar_sheets") or "gcp_service_account" in st.secrets:
-        from utils.sheets import conectar_sheets, leer_cedulas
-        sheet_id = config.get("sheet_id") or st.secrets.get("SPREADSHEET_ID", "")
-        wb = conectar_sheets(sheet_id=sheet_id)
-        st.session_state["_workbook"] = wb
-        return leer_cedulas(wb)
-    elif "df_cedulas" in st.session_state:
-        return st.session_state["df_cedulas"].to_dict("records")
-    return []
+    from utils.sheets import conectar_sheets, leer_cedulas
+    sheet_id = config.get("sheet_id") or os.environ.get("SPREADSHEET_ID", "")
+    wb = conectar_sheets(sheet_id=sheet_id)
+    st.session_state["_workbook"] = wb
+    return leer_cedulas(wb)
 
 def mostrar():
     st.markdown("## Ejecutar Bot")
     config = cargar_config()
 
-    tiene_sheets = config.get("usar_sheets") or ("gcp_service_account" in st.secrets)
+    # Leer credenciales TransUnion desde env si están disponibles
+    if os.environ.get("TRANSUNION_USUARIO"):
+        config["usuario"] = os.environ.get("TRANSUNION_USUARIO")
+        config["password"] = os.environ.get("TRANSUNION_PASSWORD", "")
+
+    tiene_sheets = _tiene_credenciales_nube() or config.get("usar_sheets")
     tiene_cedulas = tiene_sheets or ("df_cedulas" in st.session_state)
 
     if not tiene_cedulas:
@@ -51,6 +64,8 @@ def mostrar():
         st.session_state["bot_corriendo"] = False
     if "bot_resultados" not in st.session_state:
         st.session_state["bot_resultados"] = []
+    if "bot_detener" not in st.session_state:
+        st.session_state["bot_detener"] = False
 
     try:
         registros = obtener_cedulas(config)
@@ -64,7 +79,7 @@ def mostrar():
         st.warning("No se encontraron cédulas en la hoja Entrada del Google Sheets.")
         return
 
-    fuente = "Google Sheets" if tiene_sheets else "Excel local"
+    fuente = "Google Sheets"
     delay = config.get("delay", 2)
 
     col1, col2, col3 = st.columns(3)
@@ -78,21 +93,29 @@ def mostrar():
 
     st.markdown("<br>", unsafe_allow_html=True)
 
-    col_btn1, col_btn2 = st.columns([3, 1])
-    with col_btn1:
+    col_ini, col_det, col_lim = st.columns([2, 2, 1])
+    with col_ini:
         iniciar = st.button("▶ Iniciar Bot", disabled=st.session_state["bot_corriendo"], use_container_width=True)
-    with col_btn2:
-        if st.button("🗑 Limpiar", use_container_width=True):
+    with col_det:
+        detener = st.button("⏹ Detener Bot", disabled=not st.session_state["bot_corriendo"], use_container_width=True)
+    with col_lim:
+        if st.button("🗑", use_container_width=True, disabled=st.session_state["bot_corriendo"]):
             st.session_state["bot_resultados"] = []
             st.rerun()
 
+    if detener and st.session_state["bot_corriendo"]:
+        st.session_state["bot_detener"] = True
+        st.warning("⏹ Deteniendo... espera que termine la cédula actual.")
+
     if iniciar:
         st.session_state["bot_corriendo"] = True
+        st.session_state["bot_detener"] = False
         st.session_state["bot_resultados"] = []
 
         progreso_bar = st.progress(0, text="Iniciando...")
         log_placeholder = st.empty()
         tabla_placeholder = st.empty()
+        estado_placeholder = st.empty()
         logs = []
         resultados = []
         wb = st.session_state.get("_workbook")
@@ -120,20 +143,28 @@ def mostrar():
                 df_p = pd.DataFrame(resultados)
                 cols = [c for c in ["cedula", "nombre", "estado", "departamento", "municipio", "nombre_proyecto", "error"] if c in df_p.columns]
                 tabla_placeholder.dataframe(df_p[cols], use_container_width=True, hide_index=True)
+            return not st.session_state.get("bot_detener", False)
 
         try:
             from utils.bot import ejecutar_bot_sync
             resultados_finales = ejecutar_bot_sync(cedulas, config, callback)
             st.session_state["bot_resultados"] = resultados_finales
             st.session_state["bot_corriendo"] = False
+            st.session_state["bot_detener"] = False
             guardar_resultados(resultados_finales)
-            progreso_bar.progress(1.0, text="✅ Bot finalizado")
-            marcadas = sum(1 for r in resultados_finales if "MARCADO" in r.get("estado", "").upper())
-            asignadas = sum(1 for r in resultados_finales if "ASIGNADO" in r.get("estado", "").upper())
-            errores = sum(1 for r in resultados_finales if r.get("error"))
-            st.success(f"Completado: {len(resultados_finales)} cédulas — {marcadas} marcadas para pago — {asignadas} asignadas — {errores} errores")
+
+            if len(resultados_finales) < len(cedulas):
+                progreso_bar.progress(len(resultados_finales) / len(cedulas), text="⏹ Bot detenido")
+                estado_placeholder.warning(f"Detenido: {len(resultados_finales)} de {len(cedulas)} cédulas procesadas")
+            else:
+                progreso_bar.progress(1.0, text="✅ Bot finalizado")
+                marcadas = sum(1 for r in resultados_finales if "MARCADO" in r.get("estado", "").upper())
+                asignadas = sum(1 for r in resultados_finales if "ASIGNADO" in r.get("estado", "").upper())
+                errores = sum(1 for r in resultados_finales if r.get("error"))
+                estado_placeholder.success(f"✅ Completado: {len(resultados_finales)} cédulas — {marcadas} marcadas — {asignadas} asignadas — {errores} errores")
         except Exception as e:
             st.session_state["bot_corriendo"] = False
+            st.session_state["bot_detener"] = False
             st.error(f"Error crítico: {e}")
 
     if st.session_state.get("bot_resultados"):
