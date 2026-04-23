@@ -223,13 +223,20 @@ def ejecutar_fase2_desde_sheets(marcadas, config, callback=None):
                     callback(0, len(marcadas), None, f"ERROR: No se encontró el botón de login. URL: {page.url}")
                 return resultados
 
-            # Esperar redirección
-            time.sleep(5)
-            page.wait_for_url("**/cifin/**", timeout=20000)
-
-            if "cifin" not in page.url:
+            # Esperar redirección — TransUnion puede redirigir a varias URLs
+            time.sleep(6)
+            current_url = page.url
+            page_content = page.content()
+            login_exitoso = (
+                "cifin" in current_url or
+                "welcome" in current_url or
+                ("credential" not in current_url and "login" not in current_url and "nidp" not in current_url)
+            )
+            if callback:
+                callback(0, len(marcadas), None, f"URL tras login: {current_url}")
+            if not login_exitoso:
                 if callback:
-                    callback(0, len(marcadas), None, f"ERROR: Login falló. URL: {page.url}")
+                    callback(0, len(marcadas), None, f"ERROR: Login fallido. URL: {current_url}")
                 return resultados
 
             if callback:
