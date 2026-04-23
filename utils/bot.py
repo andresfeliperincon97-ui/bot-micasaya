@@ -195,7 +195,8 @@ def ejecutar_fase2_desde_sheets(marcadas, config, callback=None):
             page.wait_for_load_state("networkidle", timeout=15000)
             time.sleep(3)
 
-            # Detectar si hay iframe con el formulario
+            # Detectar iframe con el formulario
+            time.sleep(2)
             frames = page.frames
             form_frame = page
             for frame in frames:
@@ -203,36 +204,61 @@ def ejecutar_fase2_desde_sheets(marcadas, config, callback=None):
                     if frame.query_selector("input[type='password']"):
                         form_frame = frame
                         if callback:
-                            callback(0, len(marcadas), None, f"Formulario en iframe: {frame.url}")
+                            callback(0, len(marcadas), None, f"Iframe encontrado: {frame.url[:80]}")
                         break
                 except Exception:
                     pass
 
-            # Llenar credenciales en el frame correcto
+            # Mostrar HTML del frame para diagnóstico
             try:
-                form_frame.wait_for_selector("input[type='text'], input[placeholder='Usuario']", timeout=10000)
+                frame_html = form_frame.content()[:300]
+                if callback:
+                    callback(0, len(marcadas), None, f"Frame HTML: {frame_html[:200]}")
+            except Exception:
+                pass
+
+            # Llenar credenciales
+            try:
+                inputs = form_frame.query_selector_all("input")
+                if callback:
+                    callback(0, len(marcadas), None, f"Inputs encontrados: {len(inputs)}")
+                for inp in inputs:
+                    try:
+                        tipo = inp.get_attribute("type") or ""
+                        nombre = inp.get_attribute("name") or ""
+                        placeholder = inp.get_attribute("placeholder") or ""
+                        if callback:
+                            callback(0, len(marcadas), None, f"Input: type={tipo} name={nombre} placeholder={placeholder}")
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+
+            try:
                 form_frame.fill("input[type='text']", usuario)
                 time.sleep(0.5)
                 form_frame.fill("input[type='password']", password)
                 time.sleep(0.5)
             except Exception as e:
                 if callback:
-                    callback(0, len(marcadas), None, f"Error llenando campos: {e}")
+                    callback(0, len(marcadas), None, f"Error llenando: {e}")
                 return resultados
 
-            # Clic en botón de login
+            # Clic en botón
             clicked = False
             for selector in ["button:has-text('Iniciar sesión')", "button:has-text('Iniciar')", "button[type='submit']", "input[type='submit']", ".btn-primary", "button"]:
                 try:
                     form_frame.click(selector, timeout=3000)
                     clicked = True
+                    if callback:
+                        callback(0, len(marcadas), None, f"Click exitoso en: {selector}")
                     break
                 except Exception:
                     continue
 
             if not clicked:
                 if callback:
-                    callback(0, len(marcadas), None, "ERROR: No se encontró el botón de login")
+                    callback(0, len(marcadas), None, "ERROR: No se encontró botón de login")
                 return resultados
 
             # Esperar redirección
