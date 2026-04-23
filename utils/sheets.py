@@ -4,7 +4,7 @@ from google.oauth2.service_account import Credentials
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets","https://www.googleapis.com/auth/drive"]
 
 def conectar_sheets(ruta_credenciales=None, sheet_id=None):
-    """Conecta a Sheets. Si ruta_credenciales es None, usa st.secrets (nube)."""
+    """Conecta a Sheets. En nube usa st.secrets, en local usa archivo JSON."""
     try:
         import streamlit as st
         if "gcp_service_account" in st.secrets:
@@ -15,8 +15,10 @@ def conectar_sheets(ruta_credenciales=None, sheet_id=None):
         else:
             creds = Credentials.from_service_account_file(ruta_credenciales, scopes=SCOPES)
     except Exception:
-        # Modo local sin streamlit
         creds = Credentials.from_service_account_file(ruta_credenciales, scopes=SCOPES)
+
+    if not sheet_id:
+        raise Exception("No se encontró SPREADSHEET_ID en secrets ni en configuración")
 
     cliente = gspread.authorize(creds)
     return cliente.open_by_key(sheet_id)
@@ -46,7 +48,7 @@ def leer_marcadas_para_pago(workbook):
                     "departamento": fila[3].strip(),
                     "municipio": fila[4].strip(),
                     "nombre_proyecto": fila[5].strip(),
-                    "tipo_vivienda": fila[6].strip(),
+                    "tipo_vivienda": fila[6].strip() if len(fila) > 6 else "",
                     "miembros": [{"cedula_miembro": fila[0].strip(), "tipo_doc": "CEDULA"}],
                 })
     return marcadas
