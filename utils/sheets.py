@@ -1,10 +1,14 @@
 import gspread
 from google.oauth2.service_account import Credentials
+import os
+import json
 
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets","https://www.googleapis.com/auth/drive"]
 
-def conectar_sheets(ruta_credenciales=None, sheet_id=None):
-    """Conecta a Sheets. En nube usa st.secrets, en local usa archivo JSON."""
+def _get_credentials_and_sheet_id(ruta_credenciales=None, sheet_id=None):
+    """Obtiene credenciales desde st.secrets, variables de entorno, o archivo local."""
+    
+    # 1. Intentar st.secrets (Streamlit Cloud)
     try:
         import streamlit as st
         if "gcp_service_account" in st.secrets:
@@ -12,14 +16,35 @@ def conectar_sheets(ruta_credenciales=None, sheet_id=None):
             creds = Credentials.from_service_account_info(creds_dict, scopes=SCOPES)
             if not sheet_id:
                 sheet_id = st.secrets.get("SPREADSHEET_ID", "")
-        else:
-            creds = Credentials.from_service_account_file(ruta_credenciales, scopes=SCOPES)
+            return creds, sheet_id
     except Exception:
+        pass
+
+    # 2. Intentar variables de entorno (Railway)
+    gcp_env = os.environ.get("GCP_SERVICE_ACCOUNT")
+    if gcp_env:
+        try:
+            creds_dict = json.loads(gcp_env)
+            creds = Credentials.from_service_account_info(creds_dict, scopes=SCOPES)
+            if not sheet_id:
+                sheet_id = os.environ.get("SPREADSHEET_ID", "")
+            return creds, sheet_id
+        except Exception as e:
+            raise Exception(f"Error leyendo GCP_SERVICE_ACCOUNT desde env: {e}")
+
+    # 3. Archivo local
+    if ruta_credenciales and os.path.exists(ruta_credenciales):
         creds = Credentials.from_service_account_file(ruta_credenciales, scopes=SCOPES)
+        if not sheet_id:
+            sheet_id = os.environ.get("SPREADSHEET_ID", "")
+        return creds, sheet_id
 
+    raise Exception("No se encontraron credenciales de Google. Configura GCP_SERVICE_ACCOUNT como variable de entorno.")
+
+def conectar_sheets(ruta_credenciales=None, sheet_id=None):
+    creds, sheet_id = _get_credentials_and_sheet_id(ruta_credenciales, sheet_id)
     if not sheet_id:
-        raise Exception("No se encontró SPREADSHEET_ID en secrets ni en configuración")
-
+        raise Exception("No se encontró SPREADSHEET_ID")
     cliente = gspread.authorize(creds)
     return cliente.open_by_key(sheet_id)
 
