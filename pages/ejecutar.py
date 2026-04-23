@@ -26,11 +26,8 @@ def guardar_resultados(resultados):
         json.dump(datos, f, ensure_ascii=False, indent=2)
 
 def _tiene_credenciales_nube():
-    """Detecta si hay credenciales en st.secrets o variables de entorno."""
-    # Railway
     if os.environ.get("GCP_SERVICE_ACCOUNT"):
         return True
-    # Streamlit Cloud
     try:
         import streamlit as st
         return "gcp_service_account" in st.secrets
@@ -48,7 +45,6 @@ def mostrar():
     st.markdown("## Ejecutar Bot")
     config = cargar_config()
 
-    # Leer credenciales TransUnion desde env si están disponibles
     if os.environ.get("TRANSUNION_USUARIO"):
         config["usuario"] = os.environ.get("TRANSUNION_USUARIO")
         config["password"] = os.environ.get("TRANSUNION_PASSWORD", "")
@@ -57,16 +53,29 @@ def mostrar():
     tiene_cedulas = tiene_sheets or ("df_cedulas" in st.session_state)
 
     if not tiene_cedulas:
-        st.error("⚠ Pendiente: No hay cédulas cargadas — conecta Google Sheets o carga un Excel en Configuración")
+        st.error("⚠ Pendiente: No hay cédulas cargadas — conecta Google Sheets en Configuración")
         return
 
-    if "bot_corriendo" not in st.session_state:
-        st.session_state["bot_corriendo"] = False
-    if "bot_resultados" not in st.session_state:
-        st.session_state["bot_resultados"] = []
-    if "bot_detener" not in st.session_state:
-        st.session_state["bot_detener"] = False
+    for key, val in [("bot_corriendo", False), ("bot_resultados", []), ("bot_detener", False)]:
+        if key not in st.session_state:
+            st.session_state[key] = val
 
+    # Selector de modo
+    modo = st.radio(
+        "Modo de ejecución",
+        ["Fase 1 — Consultar estados", "Fase 2 — Marcar cobros pendientes"],
+        horizontal=True,
+        disabled=st.session_state["bot_corriendo"]
+    )
+
+    st.markdown("<br>", unsafe_allow_html=True)
+
+    if modo == "Fase 1 — Consultar estados":
+        _mostrar_fase1(config, tiene_sheets)
+    else:
+        _mostrar_fase2(config)
+
+def _mostrar_fase1(config, tiene_sheets):
     try:
         registros = obtener_cedulas(config)
         cedulas = [r["cedula"] for r in registros]
@@ -76,15 +85,13 @@ def mostrar():
         return
 
     if not cedulas:
-        st.warning("No se encontraron cédulas en la hoja Entrada del Google Sheets.")
+        st.warning("No se encontraron cédulas en la hoja Entrada.")
         return
 
-    fuente = "Google Sheets"
     delay = config.get("delay", 2)
-
     col1, col2, col3 = st.columns(3)
     with col1:
-        st.markdown(f'<div class="metric-box"><div class="metric-number">{len(cedulas)}</div><div class="metric-label">Cédulas ({fuente})</div></div>', unsafe_allow_html=True)
+        st.markdown(f'<div class="metric-box"><div class="metric-number">{len(cedulas)}</div><div class="metric-label">Cédulas (Google Sheets)</div></div>', unsafe_allow_html=True)
     with col2:
         st.markdown(f'<div class="metric-box"><div class="metric-number" style="font-size:1rem">Fase 1</div><div class="metric-label">Modo activo</div></div>', unsafe_allow_html=True)
     with col3:
@@ -92,20 +99,19 @@ def mostrar():
         st.markdown(f'<div class="metric-box"><div class="metric-number">~{mins} min</div><div class="metric-label">Tiempo estimado</div></div>', unsafe_allow_html=True)
 
     st.markdown("<br>", unsafe_allow_html=True)
-
     col_ini, col_det, col_lim = st.columns([2, 2, 1])
     with col_ini:
         iniciar = st.button("▶ Iniciar Bot", disabled=st.session_state["bot_corriendo"], use_container_width=True)
     with col_det:
-        detener = st.button("⏹ Detener Bot", disabled=not st.session_state["bot_corriendo"], use_container_width=True)
+        detener = st.button("⏹ Detener", disabled=not st.session_state["bot_corriendo"], use_container_width=True)
     with col_lim:
         if st.button("🗑", use_container_width=True, disabled=st.session_state["bot_corriendo"]):
             st.session_state["bot_resultados"] = []
             st.rerun()
 
-    if detener and st.session_state["bot_corriendo"]:
+    if detener:
         st.session_state["bot_detener"] = True
-        st.warning("⏹ Deteniendo... espera que termine la cédula actual.")
+        st.warning("⏹ Deteniendo...")
 
     if iniciar:
         st.session_state["bot_corriendo"] = True
@@ -152,21 +158,102 @@ def mostrar():
             st.session_state["bot_corriendo"] = False
             st.session_state["bot_detener"] = False
             guardar_resultados(resultados_finales)
-
             if len(resultados_finales) < len(cedulas):
-                progreso_bar.progress(len(resultados_finales) / len(cedulas), text="⏹ Bot detenido")
-                estado_placeholder.warning(f"Detenido: {len(resultados_finales)} de {len(cedulas)} cédulas procesadas")
+                progreso_bar.progress(len(resultados_finales) / len(cedulas), text="⏹ Detenido")
+                estado_placeholder.warning(f"Detenido: {len(resultados_finales)} de {len(cedulas)} procesadas")
             else:
-                progreso_bar.progress(1.0, text="✅ Bot finalizado")
+                progreso_bar.progress(1.0, text="✅ Finalizado")
                 marcadas = sum(1 for r in resultados_finales if "MARCADO" in r.get("estado", "").upper())
                 asignadas = sum(1 for r in resultados_finales if "ASIGNADO" in r.get("estado", "").upper())
                 errores = sum(1 for r in resultados_finales if r.get("error"))
-                estado_placeholder.success(f"✅ Completado: {len(resultados_finales)} cédulas — {marcadas} marcadas — {asignadas} asignadas — {errores} errores")
+                estado_placeholder.success(f"✅ {len(resultados_finales)} cédulas — {marcadas} marcadas — {asignadas} asignadas — {errores} errores")
         except Exception as e:
             st.session_state["bot_corriendo"] = False
-            st.session_state["bot_detener"] = False
             st.error(f"Error crítico: {e}")
 
+    _mostrar_descarga()
+
+def _mostrar_fase2(config):
+    st.info("🔄 Fase 2: Lee las cédulas con estado **MARCADO PARA PAGO** desde Google Sheets y las marca en TransUnion.")
+
+    try:
+        from utils.sheets import conectar_sheets, leer_marcadas_para_pago
+        sheet_id = config.get("sheet_id") or os.environ.get("SPREADSHEET_ID", "")
+        wb = conectar_sheets(sheet_id=sheet_id)
+        st.session_state["_workbook"] = wb
+        marcadas = leer_marcadas_para_pago(wb)
+    except Exception as e:
+        st.error(f"Error al leer Sheets: {e}")
+        return
+
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.markdown(f'<div class="metric-box"><div class="metric-number" style="color:#2e7d32">{len(marcadas)}</div><div class="metric-label">Pendientes de cobro</div></div>', unsafe_allow_html=True)
+    with col2:
+        st.markdown(f'<div class="metric-box"><div class="metric-number" style="font-size:1rem">Fase 2</div><div class="metric-label">Modo activo</div></div>', unsafe_allow_html=True)
+    with col3:
+        mins = max(1, len(marcadas) * (config.get("delay", 3) + 15) // 60)
+        st.markdown(f'<div class="metric-box"><div class="metric-number">~{mins} min</div><div class="metric-label">Tiempo estimado</div></div>', unsafe_allow_html=True)
+
+    if not marcadas:
+        st.success("No hay cédulas pendientes de cobro — todas ya fueron procesadas.")
+        return
+
+    st.markdown("<br>", unsafe_allow_html=True)
+    st.markdown("**Cédulas a marcar para cobro:**")
+    df_marc = pd.DataFrame(marcadas)[["cedula", "nombre", "departamento", "municipio", "nombre_proyecto"]]
+    st.dataframe(df_marc, use_container_width=True, hide_index=True)
+
+    col_ini, col_det, _ = st.columns([2, 2, 1])
+    with col_ini:
+        iniciar2 = st.button("▶ Ejecutar Fase 2", disabled=st.session_state["bot_corriendo"], use_container_width=True)
+    with col_det:
+        detener2 = st.button("⏹ Detener", disabled=not st.session_state["bot_corriendo"], use_container_width=True)
+
+    if detener2:
+        st.session_state["bot_detener"] = True
+        st.warning("⏹ Deteniendo...")
+
+    if iniciar2:
+        st.session_state["bot_corriendo"] = True
+        st.session_state["bot_detener"] = False
+
+        progreso_bar = st.progress(0, text="Iniciando Chrome...")
+        log_placeholder = st.empty()
+        logs = []
+        wb = st.session_state.get("_workbook")
+
+        def callback2(idx, total, resultado, mensaje):
+            if mensaje:
+                logs.append(f"[{datetime.now().strftime('%H:%M:%S')}] {mensaje}")
+            if resultado:
+                cobro = resultado.get("cobro_aplicado", False)
+                icono = "✓" if cobro else "✗"
+                logs.append(f"[{datetime.now().strftime('%H:%M:%S')}] {icono} {resultado.get('cedula','')} — {'OK' if cobro else 'NO'}")
+                if wb:
+                    try:
+                        from utils.sheets import actualizar_cobro_fila
+                        actualizar_cobro_fila(wb, resultado["fila_sheets"], cobro, resultado.get("mensaje_cobro", ""), resultado.get("timestamp", ""))
+                    except Exception as e:
+                        logs.append(f"  ⚠ Error Sheets: {e}")
+            pct = idx / total if total > 0 else 0
+            progreso_bar.progress(pct, text=f"Procesando {idx} de {total}...")
+            log_placeholder.markdown(f'<div class="log-box">{"<br>".join(logs[-20:])}</div>', unsafe_allow_html=True)
+            return not st.session_state.get("bot_detener", False)
+
+        try:
+            from utils.bot import ejecutar_fase2_desde_sheets
+            resultados_f2 = ejecutar_fase2_desde_sheets(marcadas, config, callback2)
+            st.session_state["bot_corriendo"] = False
+            st.session_state["bot_detener"] = False
+            exitosos = sum(1 for r in resultados_f2 if r.get("cobro_aplicado"))
+            progreso_bar.progress(1.0, text="✅ Fase 2 finalizada")
+            st.success(f"✅ {len(resultados_f2)} procesadas — {exitosos} cobros exitosos")
+        except Exception as e:
+            st.session_state["bot_corriendo"] = False
+            st.error(f"Error crítico: {e}")
+
+def _mostrar_descarga():
     if st.session_state.get("bot_resultados"):
         st.markdown("---")
         st.markdown("### Resultados")
