@@ -189,31 +189,42 @@ def ejecutar_fase2_desde_sheets(marcadas, config, callback=None):
             if callback:
                 callback(0, len(marcadas), None, "Iniciando sesión en TransUnion...")
 
-            # URL original del SSO que funcionó
+            # URL original del SSO
             login_url = f"{TRANSUNION_BASE}/nidp/idff/sso?id=MiPortafolioContract&sid=0&option=credential&sid=0&target=https%3A%2F%2Fmiportafolio.transunion.co%2Fcifin"
             page.goto(login_url, timeout=30000)
             page.wait_for_load_state("networkidle", timeout=15000)
-            time.sleep(2)
+            time.sleep(3)
 
-            # Llenar credenciales
-            page.wait_for_selector("input[type='text'], input[placeholder='Usuario']", timeout=15000)
-            page.fill("input[type='text']", usuario)
-            time.sleep(0.5)
-            page.fill("input[type='password']", password)
-            time.sleep(0.5)
+            # Detectar si hay iframe con el formulario
+            frames = page.frames
+            form_frame = page
+            for frame in frames:
+                try:
+                    if frame.query_selector("input[type='password']"):
+                        form_frame = frame
+                        if callback:
+                            callback(0, len(marcadas), None, f"Formulario en iframe: {frame.url}")
+                        break
+                except Exception:
+                    pass
+
+            # Llenar credenciales en el frame correcto
+            try:
+                form_frame.wait_for_selector("input[type='text'], input[placeholder='Usuario']", timeout=10000)
+                form_frame.fill("input[type='text']", usuario)
+                time.sleep(0.5)
+                form_frame.fill("input[type='password']", password)
+                time.sleep(0.5)
+            except Exception as e:
+                if callback:
+                    callback(0, len(marcadas), None, f"Error llenando campos: {e}")
+                return resultados
 
             # Clic en botón de login
             clicked = False
-            for selector in [
-                "button:has-text('Iniciar sesión')",
-                "button:has-text('Iniciar')",
-                "button[type='submit']",
-                "input[type='submit']",
-                ".btn-primary",
-                "button"
-            ]:
+            for selector in ["button:has-text('Iniciar sesión')", "button:has-text('Iniciar')", "button[type='submit']", "input[type='submit']", ".btn-primary", "button"]:
                 try:
-                    page.click(selector, timeout=3000)
+                    form_frame.click(selector, timeout=3000)
                     clicked = True
                     break
                 except Exception:
