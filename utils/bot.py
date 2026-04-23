@@ -154,39 +154,81 @@ def ejecutar_bot_sync(cedulas, config, callback=None):
 
 # ─── FASE 2: Login HTTP + Selenium ───────────────────────────────────────────
 
-def login_transunion_http(usuario, password):
-    """Hace login en TransUnion via HTTP y retorna las cookies de sesión."""
-    session = requests.Session()
-    session.headers.update({
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36",
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-    })
+def login_transunion_selenium(usuario, password, callback=None):
+    """Hace login en TransUnion via Selenium y retorna el driver autenticado."""
+    from selenium import webdriver
+    from selenium.webdriver.chrome.options import Options
+    from selenium.webdriver.chrome.service import Service
+    from selenium.webdriver.common.by import By
+    from selenium.webdriver.support.ui import WebDriverWait
+    from selenium.webdriver.support import expected_conditions as EC
 
-    # 1. Obtener página de login y CSRF token
-    login_page_url = f"{TRANSUNION_BASE}/nidp/idff/sso?id=MiPortafolioContract&sid=0&option=credential&sid=0&target=https%3A%2F%2Fmiportafolio.transunion.co%2Fcifin"
-    resp = session.get(login_page_url, timeout=30, allow_redirects=True)
+    opts = Options()
+    opts.add_argument("--headless=new")
+    opts.add_argument("--no-sandbox")
+    opts.add_argument("--disable-dev-shm-usage")
+    opts.add_argument("--disable-gpu")
+    opts.add_argument("--window-size=1280,800")
+    opts.add_argument("--disable-blink-features=AutomationControlled")
+    opts.add_experimental_option("excludeSwitches", ["enable-automation"])
+    opts.add_experimental_option("useAutomationExtension", False)
 
-    # 2. Obtener XSRF-TOKEN de las cookies
-    xsrf_token = session.cookies.get("XSRF-TOKEN", "")
+    if os.path.exists("/usr/bin/google-chrome"):
+        opts.binary_location = "/usr/bin/google-chrome"
+        try:
+            service = Service("/usr/bin/chromedriver")
+            driver = webdriver.Chrome(service=service, options=opts)
+        except Exception:
+            from webdriver_manager.chrome import ChromeDriverManager
+            driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=opts)
+    else:
+        from webdriver_manager.chrome import ChromeDriverManager
+        driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=opts)
 
-    # 3. POST al endpoint de login
-    login_url = f"{TRANSUNION_BASE}/sso-auth-server/login"
-    headers = {
-        "Content-Type": "application/x-www-form-urlencoded",
-        "Referer": login_page_url,
-        "X-XSRF-TOKEN": xsrf_token,
-    }
-    data = {
-        "username": usuario,
-        "password": password,
-        "_csrf": xsrf_token,
-    }
-    resp = session.post(login_url, data=data, headers=headers, timeout=30, allow_redirects=True)
+    # Ocultar que es Selenium
+    driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
 
-    # Verificar si llegamos al welcome
-    if "cifin/welcome" in resp.url or "cifin" in resp.url:
-        return session.cookies.get_dict()
-    return None
+    try:
+        login_url = f"{TRANSUNION_BASE}/nidp/idff/sso?id=MiPortafolioContract&sid=0&option=credential&sid=0&target=https%3A%2F%2Fmiportafolio.transunion.co%2Fcifin"
+        driver.get(login_url)
+        wait = WebDriverWait(driver, 20)
+
+        # Esperar campo de usuario
+        campo_usuario = wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "input[placeholder='Usuario'], input[type='text']")))
+        campo_usuario.clear()
+        campo_usuario.send_keys(usuario)
+        time.sleep(0.5)
+
+        campo_pass = driver.find_element(By.CSS_SELECTOR, "input[type='password']")
+        campo_pass.clear()
+        campo_pass.send_keys(password)
+        time.sleep(0.5)
+
+        # Clic en Iniciar sesión
+        try:
+            driver.find_element(By.XPATH, "//button[contains(text(),'Iniciar')]").click()
+        except Exception:
+            driver.find_element(By.CSS_SELECTOR, "button[type='submit'], input[type='submit']").click()
+
+        # Esperar redirección al welcome
+        time.sleep(5)
+
+        if "cifin" in driver.current_url or "welcome" in driver.current_url:
+            return driver
+        else:
+            if callback:
+                callback(0, 0, None, f"URL tras login: {driver.current_url}")
+            driver.quit()
+            return None
+
+    except Exception as e:
+        if callback:
+            callback(0, 0, None, f"Error en login Selenium: {str(e)[:100]}")
+        try:
+            driver.quit()
+        except Exception:
+            pass
+        return None
 
 def crear_driver_con_cookies(cookies_dict):
     """Crea un driver de Selenium y le inyecta las cookies de sesión."""
@@ -366,24 +408,13 @@ def ejecutar_fase2_desde_sheets(marcadas, config, callback=None):
         return resultados
 
     if callback:
-        callback(0, len(marcadas), None, "Iniciando sesión en TransUnion via HTTP...")
+        callback(0, len(marcadas), None, "Iniciando Chrome y sesión en TransUnion...")
 
-    # Login via HTTP para obtener cookies
-    cookies = login_transunion_http(usuario, password)
-    if not cookies:
+    # Login directo con Selenium
+    driver = login_transunion_selenium(usuario, password, callback)
+    if not driver:
         if callback:
             callback(0, len(marcadas), None, "ERROR: No se pudo iniciar sesión en TransUnion")
-        return resultados
-
-    if callback:
-        callback(0, len(marcadas), None, "Sesión iniciada. Iniciando Chrome con sesión activa...")
-
-    # Crear driver con cookies ya inyectadas
-    try:
-        driver = crear_driver_con_cookies(cookies)
-    except Exception as e:
-        if callback:
-            callback(0, len(marcadas), None, f"ERROR al iniciar Chrome: {e}")
         return resultados
 
     try:
