@@ -248,16 +248,29 @@ def ejecutar_fase2_desde_sheets(marcadas, config, callback=None):
                 callback(0, len(marcadas), None, f"URL: {current_url} | Titulo: {titulo}")
                 callback(0, len(marcadas), None, f"HTML: {html_preview[:200]}")
 
+            # Verificar login — aceptar también "Raiz - Applications Portal"
             login_exitoso = (
                 "cifin" in current_url or
                 "welcome" in current_url or
-                ("credential" not in current_url and "login" not in current_url and "nidp" not in current_url)
+                "Raiz" in titulo or
+                "Applications Portal" in titulo or
+                ("nidp" not in current_url and "login" not in current_url)
             )
 
             if not login_exitoso:
                 if callback:
                     callback(0, len(marcadas), None, f"ERROR: Login fallido. URL: {current_url}")
                 return resultados
+
+            # Si estamos en Applications Portal, navegar directo a cifin
+            if "Raiz" in titulo or "Applications Portal" in titulo or "cifin" not in current_url:
+                if callback:
+                    callback(0, len(marcadas), None, "Navegando a Mi Portafolio...")
+                page.goto(f"{TRANSUNION_BASE}/cifin/welcome", timeout=15000)
+                page.wait_for_load_state("networkidle", timeout=10000)
+                time.sleep(2)
+                if callback:
+                    callback(0, len(marcadas), None, f"URL final: {page.url}")
 
             if callback:
                 callback(0, len(marcadas), None, f"Sesión iniciada. Procesando {len(marcadas)} cédulas...")
