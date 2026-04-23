@@ -186,40 +186,32 @@ def ejecutar_fase2_desde_sheets(marcadas, config, callback=None):
         page = context.new_page()
 
         try:
-            # Login
             if callback:
                 callback(0, len(marcadas), None, "Iniciando sesión en TransUnion...")
 
-            # URL directa al login standalone que usa TransUnion
-            login_url = "https://miportafolio.transunion.co/nidp/app/login?sid=0&sid=0&uiDestination=contentDiv&isStandalone=true"
+            # URL original del SSO que funcionó
+            login_url = f"{TRANSUNION_BASE}/nidp/idff/sso?id=MiPortafolioContract&sid=0&option=credential&sid=0&target=https%3A%2F%2Fmiportafolio.transunion.co%2Fcifin"
             page.goto(login_url, timeout=30000)
             page.wait_for_load_state("networkidle", timeout=15000)
-
-            # Llenar credenciales
-            page.wait_for_selector("input", timeout=15000)
             time.sleep(2)
 
-            # Buscar campo usuario
-            for sel in ["input[placeholder='Usuario']", "input[name='username']", "input[name='Ecom_User_ID']", "input[type='text']"]:
-                try:
-                    page.fill(sel, usuario)
-                    break
-                except Exception:
-                    continue
+            # Llenar credenciales
+            page.wait_for_selector("input[type='text'], input[placeholder='Usuario']", timeout=15000)
+            page.fill("input[type='text']", usuario)
             time.sleep(0.5)
-
-            # Buscar campo password
-            for sel in ["input[type='password']", "input[name='password']", "input[name='Ecom_Password']"]:
-                try:
-                    page.fill(sel, password)
-                    break
-                except Exception:
-                    continue
+            page.fill("input[type='password']", password)
             time.sleep(0.5)
 
             # Clic en botón de login
             clicked = False
-            for selector in ["button:has-text('Iniciar sesión')", "button:has-text('Iniciar')", "button:has-text('Login')", "button[type='submit']", "input[type='submit']", ".btn-primary", "button"]:
+            for selector in [
+                "button:has-text('Iniciar sesión')",
+                "button:has-text('Iniciar')",
+                "button[type='submit']",
+                "input[type='submit']",
+                ".btn-primary",
+                "button"
+            ]:
                 try:
                     page.click(selector, timeout=3000)
                     clicked = True
@@ -229,20 +221,21 @@ def ejecutar_fase2_desde_sheets(marcadas, config, callback=None):
 
             if not clicked:
                 if callback:
-                    callback(0, len(marcadas), None, f"ERROR: No se encontró el botón de login")
+                    callback(0, len(marcadas), None, "ERROR: No se encontró el botón de login")
                 return resultados
 
-            # Esperar redirección — TransUnion puede redirigir a varias URLs
+            # Esperar redirección
             time.sleep(6)
             current_url = page.url
-            page_content = page.content()
+            if callback:
+                callback(0, len(marcadas), None, f"URL tras login: {current_url}")
+
             login_exitoso = (
                 "cifin" in current_url or
                 "welcome" in current_url or
                 ("credential" not in current_url and "login" not in current_url and "nidp" not in current_url)
             )
-            if callback:
-                callback(0, len(marcadas), None, f"URL tras login: {current_url}")
+
             if not login_exitoso:
                 if callback:
                     callback(0, len(marcadas), None, f"ERROR: Login fallido. URL: {current_url}")
@@ -251,7 +244,6 @@ def ejecutar_fase2_desde_sheets(marcadas, config, callback=None):
             if callback:
                 callback(0, len(marcadas), None, f"Sesión iniciada. Procesando {len(marcadas)} cédulas...")
 
-            # Procesar cada cédula
             for idx, datos in enumerate(marcadas):
                 if callback:
                     if callback(idx, len(marcadas), None, f"Marcando cobro: {datos['cedula']}...") is False:
@@ -283,19 +275,16 @@ def marcar_cobro_playwright(page, datos, callback=None):
         muni = datos.get("municipio", "").upper().strip()
         nombre_proyecto = datos.get("nombre_proyecto", "").upper().strip()
 
-        # Navegar a Realizar Cobro
         page.goto(f"{TRANSUNION_BASE}/cifin/welcome", timeout=15000)
         page.wait_for_load_state("networkidle", timeout=10000)
         time.sleep(2)
 
-        # Clic en MI CASA YA
         try:
             page.click("text=MI CASA YA", timeout=5000)
             time.sleep(2)
         except Exception:
             pass
 
-        # Clic en Realizar Cobro
         try:
             page.click("text=Realizar el Cobro", timeout=5000)
             time.sleep(3)
@@ -306,7 +295,6 @@ def marcar_cobro_playwright(page, datos, callback=None):
             except Exception:
                 pass
 
-        # Seleccionar Departamento
         try:
             page.wait_for_selector("select", timeout=10000)
             selects = page.query_selector_all("select")
@@ -317,7 +305,6 @@ def marcar_cobro_playwright(page, datos, callback=None):
             resultado_cobro["error_cobro"] = f"Error seleccionando departamento: {str(e)[:100]}"
             return resultado_cobro
 
-        # Seleccionar Municipio
         try:
             time.sleep(2)
             selects = page.query_selector_all("select")
@@ -327,7 +314,6 @@ def marcar_cobro_playwright(page, datos, callback=None):
         except Exception:
             pass
 
-        # Seleccionar Proyecto
         try:
             time.sleep(2)
             selects = page.query_selector_all("select")
@@ -348,14 +334,12 @@ def marcar_cobro_playwright(page, datos, callback=None):
         except Exception:
             pass
 
-        # Agregar miembros
         miembros = datos.get("miembros", [{"cedula_miembro": datos.get("cedula", ""), "tipo_doc": "CEDULA"}])
         for miembro in miembros:
             ced_m = miembro.get("cedula_miembro", "").strip()
             if not ced_m:
                 continue
             try:
-                # Seleccionar tipo documento
                 selects = page.query_selector_all("select")
                 for s in selects:
                     opciones_texto = [o.inner_text().upper() for o in s.query_selector_all("option")]
@@ -363,8 +347,6 @@ def marcar_cobro_playwright(page, datos, callback=None):
                         s.select_option(index=1)
                         break
                 time.sleep(0.5)
-
-                # Ingresar cédula
                 inputs = page.query_selector_all("input[type='text']:not([readonly]):not([disabled])")
                 for inp in inputs:
                     if inp.is_visible() and inp.is_enabled():
@@ -373,8 +355,6 @@ def marcar_cobro_playwright(page, datos, callback=None):
                             inp.fill(ced_m)
                             break
                 time.sleep(0.5)
-
-                # Clic Adicionar
                 try:
                     page.click("text=Adicionar", timeout=3000)
                     time.sleep(2)
@@ -383,7 +363,6 @@ def marcar_cobro_playwright(page, datos, callback=None):
             except Exception:
                 pass
 
-        # Clic MARCAR PARA PAGO
         try:
             page.click("text=MARCAR PARA PAGO", timeout=5000)
             time.sleep(4)
@@ -394,7 +373,6 @@ def marcar_cobro_playwright(page, datos, callback=None):
             except Exception:
                 pass
 
-        # Verificar resultado
         contenido = page.content()
         if "Cobro aplicado" in contenido:
             if "ya fue cobrado" in contenido.lower() or "no se encuentra" in contenido.lower():
@@ -403,7 +381,6 @@ def marcar_cobro_playwright(page, datos, callback=None):
                 resultado_cobro["cobro_aplicado"] = True
                 resultado_cobro["mensaje_cobro"] = "Marcado exitosamente"
 
-        # Clic Nuevo para siguiente
         try:
             page.click("text=Nuevo", timeout=3000)
             time.sleep(1)
