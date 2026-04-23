@@ -1,7 +1,7 @@
 """
 utils/bot.py
-- Fase 1: Consulta Mi Casa Ya usando HTTP requests (sin Selenium)
-- Fase 2: Login via HTTP requests + Selenium para marcar cobros en TransUnion
+- Fase 1: Consulta Mi Casa Ya usando HTTP requests (sin navegador)
+- Fase 2: Marca cobros en TransUnion usando Playwright (más liviano que Selenium)
 """
 
 import requests
@@ -80,7 +80,11 @@ def consultar_cedula(session, token, cedula, tipo_doc=1):
                     if len(celdas) >= 3:
                         ced_m = celdas[2].text.strip().replace(" ", "")
                         if ced_m.isdigit() and len(ced_m) >= 5:
-                            resultado["miembros"].append({"cedula_miembro": ced_m, "nombre": celdas[3].text.strip() if len(celdas) > 3 else "", "tipo_doc": "CEDULA"})
+                            resultado["miembros"].append({
+                                "cedula_miembro": ced_m,
+                                "nombre": celdas[3].text.strip() if len(celdas) > 3 else "",
+                                "tipo_doc": "CEDULA"
+                            })
             if any("Municipio" in h or "Depatramento" in h or "Departamento" in h for h in headers_tabla):
                 for fila in filas[1:]:
                     celdas = fila.find_all("td")
@@ -114,7 +118,8 @@ def ejecutar_bot_sync(cedulas, config, callback=None):
     try:
         session, token = obtener_token_y_sesion()
     except Exception as e:
-        if callback: callback(0, len(cedulas), None, f"Error al conectar: {e}")
+        if callback:
+            callback(0, len(cedulas), None, f"Error al conectar: {e}")
         return resultados
 
     if callback:
@@ -152,256 +157,11 @@ def ejecutar_bot_sync(cedulas, config, callback=None):
     return resultados
 
 
-# ─── FASE 2: Login HTTP + Selenium ───────────────────────────────────────────
-
-def login_transunion_selenium(usuario, password, callback=None):
-    """Hace login en TransUnion via Selenium y retorna el driver autenticado."""
-    from selenium import webdriver
-    from selenium.webdriver.chrome.options import Options
-    from selenium.webdriver.chrome.service import Service
-    from selenium.webdriver.common.by import By
-    from selenium.webdriver.support.ui import WebDriverWait
-    from selenium.webdriver.support import expected_conditions as EC
-
-    opts = Options()
-    opts.add_argument("--headless=new")
-    opts.add_argument("--no-sandbox")
-    opts.add_argument("--disable-dev-shm-usage")
-    opts.add_argument("--disable-gpu")
-    opts.add_argument("--window-size=1280,800")
-    opts.add_argument("--disable-blink-features=AutomationControlled")
-    opts.add_argument("--shm-size=2gb")
-    opts.add_argument("--disable-setuid-sandbox")
-    opts.add_argument("--single-process")
-    opts.add_argument("--no-zygote")
-    opts.add_argument("--disable-features=VizDisplayCompositor")
-    opts.add_experimental_option("excludeSwitches", ["enable-automation"])
-    opts.add_experimental_option("useAutomationExtension", False)
-
-    if os.path.exists("/usr/bin/google-chrome"):
-        opts.binary_location = "/usr/bin/google-chrome"
-        try:
-            service = Service("/usr/bin/chromedriver")
-            driver = webdriver.Chrome(service=service, options=opts)
-        except Exception:
-            from webdriver_manager.chrome import ChromeDriverManager
-            driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=opts)
-    else:
-        from webdriver_manager.chrome import ChromeDriverManager
-        driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=opts)
-
-    # Ocultar que es Selenium
-    driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
-
-    try:
-        login_url = f"{TRANSUNION_BASE}/nidp/idff/sso?id=MiPortafolioContract&sid=0&option=credential&sid=0&target=https%3A%2F%2Fmiportafolio.transunion.co%2Fcifin"
-        driver.get(login_url)
-        wait = WebDriverWait(driver, 20)
-
-        # Esperar campo de usuario
-        campo_usuario = wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "input[placeholder='Usuario'], input[type='text']")))
-        campo_usuario.clear()
-        campo_usuario.send_keys(usuario)
-        time.sleep(0.5)
-
-        campo_pass = driver.find_element(By.CSS_SELECTOR, "input[type='password']")
-        campo_pass.clear()
-        campo_pass.send_keys(password)
-        time.sleep(0.5)
-
-        # Clic en Iniciar sesión
-        try:
-            driver.find_element(By.XPATH, "//button[contains(text(),'Iniciar')]").click()
-        except Exception:
-            driver.find_element(By.CSS_SELECTOR, "button[type='submit'], input[type='submit']").click()
-
-        # Esperar redirección al welcome
-        time.sleep(5)
-
-        if "cifin" in driver.current_url or "welcome" in driver.current_url:
-            return driver
-        else:
-            if callback:
-                callback(0, 0, None, f"URL tras login: {driver.current_url}")
-            driver.quit()
-            return None
-
-    except Exception as e:
-        if callback:
-            callback(0, 0, None, f"Error en login Selenium: {str(e)[:100]}")
-        try:
-            driver.quit()
-        except Exception:
-            pass
-        return None
-
-def crear_driver_con_cookies(cookies_dict):
-    """Crea un driver de Selenium y le inyecta las cookies de sesión."""
-    from selenium import webdriver
-    from selenium.webdriver.chrome.options import Options
-    from selenium.webdriver.chrome.service import Service
-
-    opts = Options()
-    opts.add_argument("--headless=new")
-    opts.add_argument("--no-sandbox")
-    opts.add_argument("--disable-dev-shm-usage")
-    opts.add_argument("--disable-gpu")
-    opts.add_argument("--window-size=1280,800")
-
-    if os.path.exists("/usr/bin/google-chrome"):
-        opts.binary_location = "/usr/bin/google-chrome"
-        try:
-            service = Service("/usr/bin/chromedriver")
-            driver = webdriver.Chrome(service=service, options=opts)
-        except Exception:
-            from webdriver_manager.chrome import ChromeDriverManager
-            driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=opts)
-    else:
-        from webdriver_manager.chrome import ChromeDriverManager
-        driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=opts)
-
-    # Navegar al dominio primero, luego inyectar cookies
-    driver.get(f"{TRANSUNION_BASE}/cifin/welcome")
-    for name, value in cookies_dict.items():
-        try:
-            driver.add_cookie({"name": name, "value": value, "domain": "miportafolio.transunion.co"})
-        except Exception:
-            pass
-    driver.refresh()
-    time.sleep(2)
-    return driver
-
-def esperar_opciones_select(driver, index, min_opts=2, timeout=15):
-    from selenium.webdriver.common.by import By
-    from selenium.webdriver.support.ui import Select
-    for _ in range(timeout):
-        try:
-            sels = driver.find_elements(By.TAG_NAME, "select")
-            if len(sels) > index and len(Select(sels[index]).options) >= min_opts:
-                return True
-        except Exception:
-            pass
-        time.sleep(1)
-    return False
-
-def buscar_proyecto_en_select(select_obj, nombre_proyecto):
-    partes = [p.strip() for p in nombre_proyecto.upper().split(" - ") if len(p.strip()) > 3]
-    for opcion in select_obj.options:
-        texto = opcion.text.upper()
-        if len(partes) >= 2 and all(p in texto for p in partes):
-            return opcion.text
-        elif partes and partes[0] in texto:
-            return opcion.text
-    return None
-
-def ir_a_realizar_cobro(driver):
-    from selenium.webdriver.common.by import By
-    driver.get(f"{TRANSUNION_BASE}/cifin/welcome")
-    time.sleep(3)
-    for texto in ["MI CASA YA", "MI CASA"]:
-        try:
-            driver.find_element(By.PARTIAL_LINK_TEXT, texto).click()
-            time.sleep(2)
-            break
-        except Exception:
-            pass
-    for texto in ["Realizar el Cobro", "Realizar"]:
-        try:
-            driver.find_element(By.PARTIAL_LINK_TEXT, texto).click()
-            time.sleep(3)
-            break
-        except Exception:
-            pass
-
-def marcar_cobro(driver, datos):
-    from selenium.webdriver.common.by import By
-    from selenium.webdriver.support.ui import Select
-
-    resultado_cobro = {"cobro_aplicado": False, "mensaje_cobro": "", "error_cobro": ""}
-    try:
-        ir_a_realizar_cobro(driver)
-        depto = datos.get("departamento", "").upper().strip()
-        muni = datos.get("municipio", "").upper().strip()
-        nombre_proyecto = datos.get("nombre_proyecto", "").upper().strip()
-
-        esperar_opciones_select(driver, 0)
-        sels = driver.find_elements(By.TAG_NAME, "select")
-        Select(sels[0]).select_by_visible_text(depto)
-        time.sleep(1)
-
-        esperar_opciones_select(driver, 1)
-        time.sleep(2)
-        sels = driver.find_elements(By.TAG_NAME, "select")
-        Select(sels[1]).select_by_visible_text(muni)
-        time.sleep(1)
-
-        esperar_opciones_select(driver, 2)
-        time.sleep(2)
-        sels = driver.find_elements(By.TAG_NAME, "select")
-        sel_proy = Select(sels[2])
-        opcion = buscar_proyecto_en_select(sel_proy, nombre_proyecto)
-        if opcion:
-            sel_proy.select_by_visible_text(opcion)
-        elif len(sel_proy.options) > 1:
-            sel_proy.select_by_index(1)
-        time.sleep(2)
-
-        miembros = datos.get("miembros", [{"cedula_miembro": datos.get("cedula", ""), "tipo_doc": "CEDULA"}])
-        for miembro in miembros:
-            ced_m = miembro.get("cedula_miembro", "").strip()
-            if not ced_m:
-                continue
-            for s in driver.find_elements(By.TAG_NAME, "select"):
-                try:
-                    sel_obj = Select(s)
-                    if any("CEDULA" in o.text.upper() for o in sel_obj.options):
-                        sel_obj.select_by_index(1)
-                        break
-                except Exception:
-                    pass
-            time.sleep(0.5)
-            for inp in driver.find_elements(By.CSS_SELECTOR, "input[type='text']:not([readonly]):not([disabled])"):
-                try:
-                    if inp.is_displayed() and inp.is_enabled():
-                        val = inp.get_attribute("value") or ""
-                        if val == "" or val.isdigit():
-                            inp.clear()
-                            inp.send_keys(ced_m)
-                            break
-                except Exception:
-                    pass
-            time.sleep(0.5)
-            try:
-                driver.find_element(By.XPATH, "//*[contains(@value,'Adicionar') or contains(text(),'Adicionar')]").click()
-            except Exception:
-                pass
-            time.sleep(2)
-
-        try:
-            driver.find_element(By.XPATH, "//*[contains(@value,'MARCAR') or contains(text(),'MARCAR')]").click()
-        except Exception:
-            pass
-        time.sleep(4)
-
-        contenido = driver.page_source
-        if "Cobro aplicado" in contenido:
-            if "ya fue cobrado" in contenido.lower() or "no se encuentra" in contenido.lower():
-                resultado_cobro["mensaje_cobro"] = "Ya cobrado o no aplica"
-            else:
-                resultado_cobro["cobro_aplicado"] = True
-                resultado_cobro["mensaje_cobro"] = "Marcado exitosamente"
-
-        try:
-            driver.find_element(By.XPATH, "//*[contains(@value,'Nuevo') or contains(text(),'Nuevo')]").click()
-            time.sleep(1)
-        except Exception:
-            pass
-
-    except Exception as e:
-        resultado_cobro["error_cobro"] = str(e)[:200]
-    return resultado_cobro
+# ─── FASE 2: Playwright ───────────────────────────────────────────────────────
 
 def ejecutar_fase2_desde_sheets(marcadas, config, callback=None):
+    from playwright.sync_api import sync_playwright
+
     resultados = []
     usuario = config.get("usuario") or os.environ.get("TRANSUNION_USUARIO", "")
     password = config.get("password") or os.environ.get("TRANSUNION_PASSWORD", "")
@@ -413,34 +173,204 @@ def ejecutar_fase2_desde_sheets(marcadas, config, callback=None):
         return resultados
 
     if callback:
-        callback(0, len(marcadas), None, "Iniciando Chrome y sesión en TransUnion...")
+        callback(0, len(marcadas), None, "Iniciando Playwright para TransUnion...")
 
-    # Login directo con Selenium
-    driver = login_transunion_selenium(usuario, password, callback)
-    if not driver:
-        if callback:
-            callback(0, len(marcadas), None, "ERROR: No se pudo iniciar sesión en TransUnion")
-        return resultados
+    with sync_playwright() as p:
+        browser = p.chromium.launch(
+            headless=True,
+            args=["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu"]
+        )
+        context = browser.new_context(
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36"
+        )
+        page = context.new_page()
 
-    try:
-        if callback:
-            callback(0, len(marcadas), None, f"Chrome listo. Procesando {len(marcadas)} cédulas...")
-
-        for idx, datos in enumerate(marcadas):
-            if callback:
-                if callback(idx, len(marcadas), None, f"Marcando cobro: {datos['cedula']}...") is False:
-                    break
-            cobro = marcar_cobro(driver, datos)
-            datos.update(cobro)
-            datos["timestamp"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            resultados.append(datos)
-            if callback:
-                if callback(idx + 1, len(marcadas), datos, "") is False:
-                    break
-            time.sleep(delay)
-    finally:
         try:
-            driver.quit()
+            # Login
+            if callback:
+                callback(0, len(marcadas), None, "Iniciando sesión en TransUnion...")
+
+            login_url = f"{TRANSUNION_BASE}/nidp/idff/sso?id=MiPortafolioContract&sid=0&option=credential&sid=0&target=https%3A%2F%2Fmiportafolio.transunion.co%2Fcifin"
+            page.goto(login_url, timeout=30000)
+            page.wait_for_load_state("networkidle", timeout=15000)
+
+            # Llenar credenciales
+            page.fill("input[placeholder='Usuario'], input[type='text']", usuario)
+            time.sleep(0.5)
+            page.fill("input[type='password']", password)
+            time.sleep(0.5)
+            page.click("button[type='submit'], button:has-text('Iniciar')")
+
+            # Esperar redirección
+            page.wait_for_url("**/cifin/**", timeout=20000)
+
+            if "cifin" not in page.url:
+                if callback:
+                    callback(0, len(marcadas), None, f"ERROR: Login falló. URL: {page.url}")
+                return resultados
+
+            if callback:
+                callback(0, len(marcadas), None, f"Sesión iniciada. Procesando {len(marcadas)} cédulas...")
+
+            # Procesar cada cédula
+            for idx, datos in enumerate(marcadas):
+                if callback:
+                    if callback(idx, len(marcadas), None, f"Marcando cobro: {datos['cedula']}...") is False:
+                        break
+
+                cobro = marcar_cobro_playwright(page, datos, callback)
+                datos.update(cobro)
+                datos["timestamp"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                resultados.append(datos)
+
+                if callback:
+                    if callback(idx + 1, len(marcadas), datos, "") is False:
+                        break
+
+                time.sleep(delay)
+
+        except Exception as e:
+            if callback:
+                callback(0, len(marcadas), None, f"ERROR: {str(e)[:150]}")
+        finally:
+            browser.close()
+
+    return resultados
+
+def marcar_cobro_playwright(page, datos, callback=None):
+    resultado_cobro = {"cobro_aplicado": False, "mensaje_cobro": "", "error_cobro": ""}
+    try:
+        depto = datos.get("departamento", "").upper().strip()
+        muni = datos.get("municipio", "").upper().strip()
+        nombre_proyecto = datos.get("nombre_proyecto", "").upper().strip()
+
+        # Navegar a Realizar Cobro
+        page.goto(f"{TRANSUNION_BASE}/cifin/welcome", timeout=15000)
+        page.wait_for_load_state("networkidle", timeout=10000)
+        time.sleep(2)
+
+        # Clic en MI CASA YA
+        try:
+            page.click("text=MI CASA YA", timeout=5000)
+            time.sleep(2)
         except Exception:
             pass
-    return resultados
+
+        # Clic en Realizar Cobro
+        try:
+            page.click("text=Realizar el Cobro", timeout=5000)
+            time.sleep(3)
+        except Exception:
+            try:
+                page.click("text=Realizar", timeout=5000)
+                time.sleep(3)
+            except Exception:
+                pass
+
+        # Seleccionar Departamento
+        try:
+            page.wait_for_selector("select", timeout=10000)
+            selects = page.query_selector_all("select")
+            if selects:
+                selects[0].select_option(label=depto)
+                time.sleep(1)
+        except Exception as e:
+            resultado_cobro["error_cobro"] = f"Error seleccionando departamento: {str(e)[:100]}"
+            return resultado_cobro
+
+        # Seleccionar Municipio
+        try:
+            time.sleep(2)
+            selects = page.query_selector_all("select")
+            if len(selects) > 1:
+                selects[1].select_option(label=muni)
+                time.sleep(1)
+        except Exception:
+            pass
+
+        # Seleccionar Proyecto
+        try:
+            time.sleep(2)
+            selects = page.query_selector_all("select")
+            if len(selects) > 2:
+                opciones = selects[2].query_selector_all("option")
+                opcion_elegida = None
+                partes = [p.strip() for p in nombre_proyecto.split(" - ") if len(p.strip()) > 3]
+                for op in opciones:
+                    texto = op.inner_text().upper()
+                    if all(p in texto for p in partes):
+                        opcion_elegida = op.get_attribute("value")
+                        break
+                if opcion_elegida:
+                    selects[2].select_option(value=opcion_elegida)
+                elif len(opciones) > 1:
+                    selects[2].select_option(index=1)
+                time.sleep(2)
+        except Exception:
+            pass
+
+        # Agregar miembros
+        miembros = datos.get("miembros", [{"cedula_miembro": datos.get("cedula", ""), "tipo_doc": "CEDULA"}])
+        for miembro in miembros:
+            ced_m = miembro.get("cedula_miembro", "").strip()
+            if not ced_m:
+                continue
+            try:
+                # Seleccionar tipo documento
+                selects = page.query_selector_all("select")
+                for s in selects:
+                    opciones_texto = [o.inner_text().upper() for o in s.query_selector_all("option")]
+                    if any("CEDULA" in t for t in opciones_texto):
+                        s.select_option(index=1)
+                        break
+                time.sleep(0.5)
+
+                # Ingresar cédula
+                inputs = page.query_selector_all("input[type='text']:not([readonly]):not([disabled])")
+                for inp in inputs:
+                    if inp.is_visible() and inp.is_enabled():
+                        val = inp.get_attribute("value") or ""
+                        if val == "" or val.isdigit():
+                            inp.fill(ced_m)
+                            break
+                time.sleep(0.5)
+
+                # Clic Adicionar
+                try:
+                    page.click("text=Adicionar", timeout=3000)
+                    time.sleep(2)
+                except Exception:
+                    pass
+            except Exception:
+                pass
+
+        # Clic MARCAR PARA PAGO
+        try:
+            page.click("text=MARCAR PARA PAGO", timeout=5000)
+            time.sleep(4)
+        except Exception:
+            try:
+                page.click("text=MARCAR", timeout=3000)
+                time.sleep(4)
+            except Exception:
+                pass
+
+        # Verificar resultado
+        contenido = page.content()
+        if "Cobro aplicado" in contenido:
+            if "ya fue cobrado" in contenido.lower() or "no se encuentra" in contenido.lower():
+                resultado_cobro["mensaje_cobro"] = "Ya cobrado o no aplica"
+            else:
+                resultado_cobro["cobro_aplicado"] = True
+                resultado_cobro["mensaje_cobro"] = "Marcado exitosamente"
+
+        # Clic Nuevo para siguiente
+        try:
+            page.click("text=Nuevo", timeout=3000)
+            time.sleep(1)
+        except Exception:
+            pass
+
+    except Exception as e:
+        resultado_cobro["error_cobro"] = str(e)[:200]
+    return resultado_cobro
