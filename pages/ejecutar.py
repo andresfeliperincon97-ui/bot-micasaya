@@ -63,7 +63,7 @@ def mostrar():
     # Selector de modo
     modo = st.radio(
         "Modo de ejecución",
-        ["Fase 1 — Consultar estados", "Fase 2 — Marcar cobros pendientes"],
+        ["Fase 1 — Consultar estados", "Fase 2 — Cobrar subsidios pendientes"],
         horizontal=True,
         disabled=st.session_state["bot_corriendo"]
     )
@@ -174,7 +174,7 @@ def _mostrar_fase1(config, tiene_sheets):
     _mostrar_descarga()
 
 def _mostrar_fase2(config):
-    st.info("🔄 Fase 2: Lee las cédulas con estado **MARCADO PARA PAGO** desde Google Sheets y las marca en TransUnion.")
+    st.info("🔄 Fase 2: Lee las cédulas con estado **APLICADO SIN COBERTURA** desde Google Sheets y las marca en TransUnion.")
 
     try:
         from utils.sheets import conectar_sheets, leer_marcadas_para_pago
