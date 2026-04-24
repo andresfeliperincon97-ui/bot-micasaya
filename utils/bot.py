@@ -1,7 +1,7 @@
 """
 utils/bot.py
 - Fase 1: Consulta Mi Casa Ya usando HTTP requests (sin navegador)
-- Fase 2: Marca cobros en TransUnion usando Playwright (más liviano que Selenium)
+- Fase 2: Marca cobros en TransUnion usando Playwright
 """
 
 import requests
@@ -189,114 +189,56 @@ def ejecutar_fase2_desde_sheets(marcadas, config, callback=None):
             if callback:
                 callback(0, len(marcadas), None, "Iniciando sesión en TransUnion...")
 
-            # URL original del SSO
             login_url = f"{TRANSUNION_BASE}/nidp/idff/sso?id=MiPortafolioContract&sid=0&option=credential&sid=0&target=https%3A%2F%2Fmiportafolio.transunion.co%2Fcifin"
             page.goto(login_url, timeout=30000)
             page.wait_for_load_state("networkidle", timeout=15000)
-            time.sleep(3)
-
-            # Detectar iframe con el formulario
             time.sleep(2)
-            frames = page.frames
-            form_frame = page
-            for frame in frames:
-                try:
-                    if frame.query_selector("input[type='password']"):
-                        form_frame = frame
-                        if callback:
-                            callback(0, len(marcadas), None, f"Iframe encontrado: {frame.url[:80]}")
-                        break
-                except Exception:
-                    pass
-
-            # Mostrar HTML del frame para diagnóstico
-            try:
-                frame_html = form_frame.content()[:300]
-                if callback:
-                    callback(0, len(marcadas), None, f"Frame HTML: {frame_html[:200]}")
-            except Exception:
-                pass
 
             # Llenar credenciales
-            try:
-                inputs = form_frame.query_selector_all("input")
-                if callback:
-                    callback(0, len(marcadas), None, f"Inputs encontrados: {len(inputs)}")
-                for inp in inputs:
-                    try:
-                        tipo = inp.get_attribute("type") or ""
-                        nombre = inp.get_attribute("name") or ""
-                        placeholder = inp.get_attribute("placeholder") or ""
-                        if callback:
-                            callback(0, len(marcadas), None, f"Input: type={tipo} name={nombre} placeholder={placeholder}")
-                    except Exception:
-                        pass
-            except Exception:
-                pass
+            page.wait_for_selector("input[type='text'], input[placeholder='Usuario']", timeout=15000)
+            page.fill("input[type='text']", usuario)
+            time.sleep(0.5)
+            page.fill("input[type='password']", password)
+            time.sleep(0.5)
 
-            try:
-                form_frame.fill("input[type='text']", usuario)
-                time.sleep(0.5)
-                form_frame.fill("input[type='password']", password)
-                time.sleep(0.5)
-            except Exception as e:
-                if callback:
-                    callback(0, len(marcadas), None, f"Error llenando: {e}")
-                return resultados
-
-            # Clic en botón
+            # Clic en botón de login — probar múltiples selectores
             clicked = False
-            for selector in ["button:has-text('Iniciar sesión')", "button:has-text('Iniciar')", "button[type='submit']", "input[type='submit']", ".btn-primary", "button"]:
+            for selector in [
+                "button:has-text('Iniciar sesión')",
+                "button:has-text('Iniciar')",
+                "button[type='submit']",
+                "input[type='submit']",
+                ".btn-primary",
+                "button"
+            ]:
                 try:
-                    form_frame.click(selector, timeout=3000)
+                    page.click(selector, timeout=3000)
                     clicked = True
-                    if callback:
-                        callback(0, len(marcadas), None, f"Click exitoso en: {selector}")
                     break
                 except Exception:
                     continue
 
             if not clicked:
                 if callback:
-                    callback(0, len(marcadas), None, "ERROR: No se encontró botón de login")
+                    callback(0, len(marcadas), None, "ERROR: No se encontró el botón de login")
                 return resultados
 
             # Esperar redirección
             time.sleep(6)
             current_url = page.url
-            try:
-                titulo = page.title()
-                html_preview = page.content()[:500]
-            except Exception:
-                titulo = ""
-                html_preview = ""
             if callback:
-                callback(0, len(marcadas), None, f"URL: {current_url} | Titulo: {titulo}")
-                callback(0, len(marcadas), None, f"HTML: {html_preview[:200]}")
+                callback(0, len(marcadas), None, f"URL tras login: {current_url}")
 
-            # Verificar login — aceptar también "Raiz - Applications Portal"
             login_exitoso = (
                 "cifin" in current_url or
                 "welcome" in current_url or
-                "Raiz" in titulo or
-                "Applications Portal" in titulo or
-                ("nidp" not in current_url and "login" not in current_url)
+                ("credential" not in current_url and "login" not in current_url and "nidp" not in current_url)
             )
 
             if not login_exitoso:
                 if callback:
                     callback(0, len(marcadas), None, f"ERROR: Login fallido. URL: {current_url}")
                 return resultados
-
-            # Si estamos en Applications Portal, navegar directo a cifin
-            if "Raiz" in titulo or "Applications Portal" in titulo or "cifin" not in current_url:
-                if callback:
-                    callback(0, len(marcadas), None, "Navegando a Mi Portafolio...")
-                page.goto(f"{TRANSUNION_BASE}/cifin/welcome", timeout=15000)
-                page.wait_for_load_state("networkidle", timeout=10000)
-                time.sleep(2)
-                if callback:
-                    callback(0, len(marcadas), None, f"URL final: {page.url}")
 
             if callback:
                 callback(0, len(marcadas), None, f"Sesión iniciada. Procesando {len(marcadas)} cédulas...")
