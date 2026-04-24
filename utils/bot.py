@@ -162,15 +162,19 @@ def ejecutar_bot_sync(cedulas, config, callback=None):
 def cerrar_sesion_transunion(page, callback=None):
     """Cierra sesión en TransUnion para liberar la sesión."""
     try:
-        page.goto(f"{TRANSUNION_BASE}/cifin/welcome", timeout=10000)
-        page.wait_for_load_state("networkidle", timeout=8000)
-        page.click("text=CERRAR SESIÓN", timeout=5000)
+        # URL directa de logout que usa TransUnion
+        page.goto(f"{TRANSUNION_BASE}/AGLogout", timeout=10000)
         time.sleep(2)
+        # Aceptar popup si aparece
+        try:
+            page.click("button:has-text('Aceptar')", timeout=3000)
+            time.sleep(1)
+        except Exception:
+            pass
         if callback:
             callback(0, 0, None, "Sesión cerrada en TransUnion ✓")
     except Exception:
         try:
-            # URL directa de logout
             page.goto(f"{TRANSUNION_BASE}/nidp/app/logout", timeout=10000)
             time.sleep(2)
             if callback:
