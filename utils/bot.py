@@ -159,6 +159,25 @@ def ejecutar_bot_sync(cedulas, config, callback=None):
 
 # ─── FASE 2: Playwright ───────────────────────────────────────────────────────
 
+def cerrar_sesion_transunion(page, callback=None):
+    """Cierra sesión en TransUnion para liberar la sesión."""
+    try:
+        page.goto(f"{TRANSUNION_BASE}/cifin/welcome", timeout=10000)
+        page.wait_for_load_state("networkidle", timeout=8000)
+        page.click("text=CERRAR SESIÓN", timeout=5000)
+        time.sleep(2)
+        if callback:
+            callback(0, 0, None, "Sesión cerrada en TransUnion ✓")
+    except Exception:
+        try:
+            # URL directa de logout
+            page.goto(f"{TRANSUNION_BASE}/nidp/app/logout", timeout=10000)
+            time.sleep(2)
+            if callback:
+                callback(0, 0, None, "Sesión cerrada en TransUnion ✓")
+        except Exception:
+            pass
+
 def ejecutar_fase2_desde_sheets(marcadas, config, callback=None):
     from playwright.sync_api import sync_playwright
 
@@ -201,7 +220,7 @@ def ejecutar_fase2_desde_sheets(marcadas, config, callback=None):
             page.fill("input[type='password']", password)
             time.sleep(0.5)
 
-            # Clic en botón de login — probar múltiples selectores
+            # Clic en botón de login
             clicked = False
             for selector in [
                 "button:has-text('Iniciar sesión')",
@@ -263,6 +282,8 @@ def ejecutar_fase2_desde_sheets(marcadas, config, callback=None):
             if callback:
                 callback(0, len(marcadas), None, f"ERROR: {str(e)[:150]}")
         finally:
+            # Siempre cerrar sesión antes de cerrar el browser
+            cerrar_sesion_transunion(page, callback)
             browser.close()
 
     return resultados
@@ -274,25 +295,9 @@ def marcar_cobro_playwright(page, datos, callback=None):
         muni = datos.get("municipio", "").upper().strip()
         nombre_proyecto = datos.get("nombre_proyecto", "").upper().strip()
 
-        page.goto(f"{TRANSUNION_BASE}/cifin/welcome", timeout=15000)
+        page.goto(f"{TRANSUNION_BASE}/cifin/MiCasaYa/solicitarDesembolso/faces/pagos?destino=solicitarDesembolso", timeout=15000)
         page.wait_for_load_state("networkidle", timeout=10000)
         time.sleep(2)
-
-        try:
-            page.click("text=MI CASA YA", timeout=5000)
-            time.sleep(2)
-        except Exception:
-            pass
-
-        try:
-            page.click("text=Realizar el Cobro", timeout=5000)
-            time.sleep(3)
-        except Exception:
-            try:
-                page.click("text=Realizar", timeout=5000)
-                time.sleep(3)
-            except Exception:
-                pass
 
         try:
             page.wait_for_selector("select", timeout=10000)
