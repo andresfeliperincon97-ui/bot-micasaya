@@ -162,7 +162,7 @@ def ejecutar_bot_sync(cedulas, config, callback=None):
 def cerrar_sesion_transunion(page, callback=None):
     """Cierra sesión en TransUnion."""
     try:
-        page.goto(f"{TRANSUNION_BASE}/AGLogout", timeout=10000)
+        page.goto(f"{TRANSUNION_BASE}/AGLogout", timeout=15000)
         time.sleep(2)
         try:
             page.click("button:has-text('Aceptar')", timeout=3000)
@@ -173,7 +173,7 @@ def cerrar_sesion_transunion(page, callback=None):
             callback(0, 0, None, "Sesión cerrada en TransUnion ✓")
     except Exception:
         try:
-            page.goto(f"{TRANSUNION_BASE}/nidp/app/logout", timeout=10000)
+            page.goto(f"{TRANSUNION_BASE}/nidp/app/logout", timeout=15000)
             time.sleep(2)
             if callback:
                 callback(0, 0, None, "Sesión cerrada en TransUnion ✓")
@@ -183,8 +183,8 @@ def cerrar_sesion_transunion(page, callback=None):
 
 def login_transunion_playwright(page, usuario, password, callback=None):
     """
-    Login en TransUnion usando Playwright puro (sin page.request).
-    Llena el formulario y presiona Enter. Retorna True si login exitoso.
+    Login en TransUnion usando Playwright puro.
+    Usa domcontentloaded (más tolerante) en lugar de networkidle.
     """
     login_url = (
         f"{TRANSUNION_BASE}/nidp/idff/sso?id=MiPortafolioContract"
@@ -192,14 +192,17 @@ def login_transunion_playwright(page, usuario, password, callback=None):
         f"&target=https%3A%2F%2Fmiportafolio.transunion.co%2Fcifin"
     )
 
-    page.goto(login_url, timeout=30000)
-    page.wait_for_load_state("networkidle", timeout=15000)
-    time.sleep(2)
+    if callback:
+        callback(0, 0, None, "Cargando página de login...")
+
+    # Usar domcontentloaded — más rápido y tolerante que networkidle
+    page.goto(login_url, timeout=60000, wait_until="domcontentloaded")
+    time.sleep(4)  # Dar tiempo extra para que cargue el JS del formulario
 
     if callback:
-        callback(0, 0, None, f"Página login cargada: {page.url[:60]}...")
+        callback(0, 0, None, f"Página cargada: {page.url[:70]}")
 
-    # Llenar usuario
+    # Esperar que aparezca el campo de usuario
     usuario_lleno = False
     for sel in [
         "input[name='username']",
@@ -207,9 +210,11 @@ def login_transunion_playwright(page, usuario, password, callback=None):
         "input[type='text']",
     ]:
         try:
-            page.wait_for_selector(sel, timeout=5000)
+            page.wait_for_selector(sel, timeout=10000)
             page.fill(sel, str(usuario))
             usuario_lleno = True
+            if callback:
+                callback(0, 0, None, "Usuario ingresado ✓")
             break
         except Exception:
             continue
@@ -229,29 +234,26 @@ def login_transunion_playwright(page, usuario, password, callback=None):
     ]:
         try:
             page.fill(sel, str(password))
+            if callback:
+                callback(0, 0, None, "Contraseña ingresada ✓")
             break
         except Exception:
             continue
 
     time.sleep(0.5)
 
-    # Presionar Enter (más confiable que buscar botón)
+    # Presionar Enter
     page.keyboard.press("Enter")
-
-    # Esperar redirección — máximo 15 segundos
-    try:
-        page.wait_for_url(
-            lambda url: "cifin" in url or "welcome" in url or ("login" not in url and "nidp" not in url),
-            timeout=15000
-        )
-    except Exception:
-        pass
-
-    time.sleep(3)
-    url_actual = page.url
-
     if callback:
-        callback(0, 0, None, f"URL tras login: {url_actual[:80]}...")
+        callback(0, 0, None, "Enter presionado, esperando redirección...")
+
+    # Esperar hasta 20 segundos a que redirija
+    time.sleep(10)
+
+    # Verificar URL actual
+    url_actual = page.url
+    if callback:
+        callback(0, 0, None, f"URL tras login: {url_actual[:80]}")
 
     login_exitoso = (
         ("cifin" in url_actual or "welcome" in url_actual) and
@@ -340,24 +342,24 @@ def marcar_cobro_playwright(page, datos, callback=None):
         if callback:
             callback(0, 0, None, f"  Navegando al formulario...")
 
-        # Navegar al formulario de cobro
+        # Ir directo al formulario de cobro
         page.goto(
             f"{TRANSUNION_BASE}/cifin/MiCasaYa/solicitarDesembolso/faces/pagos?destino=solicitarDesembolso",
-            timeout=20000
+            timeout=30000,
+            wait_until="domcontentloaded"
         )
-        page.wait_for_load_state("networkidle", timeout=10000)
-        time.sleep(3)
+        time.sleep(4)
 
         if "login" in page.url or "nidp" in page.url:
             resultado_cobro["error_cobro"] = "Sesión expirada"
             return resultado_cobro
 
         if callback:
-            callback(0, 0, None, f"  Depto: {depto} | Muni: {muni}")
+            callback(0, 0, None, f"  Formulario cargado | Depto: {depto} | Muni: {muni}")
 
         # ── Departamento ──
         try:
-            page.wait_for_selector("select", timeout=10000)
+            page.wait_for_selector("select", timeout=15000)
             selects = page.query_selector_all("select")
             if selects:
                 selects[0].select_option(label=depto)
@@ -378,7 +380,7 @@ def marcar_cobro_playwright(page, datos, callback=None):
 
         # ── Proyecto ──
         try:
-            time.sleep(1)
+            time.sleep(2)
             selects = page.query_selector_all("select")
             if len(selects) > 2:
                 opciones = selects[2].query_selector_all("option")
@@ -398,7 +400,7 @@ def marcar_cobro_playwright(page, datos, callback=None):
                 if opcion_elegida:
                     selects[2].select_option(value=opcion_elegida)
                     if callback:
-                        callback(0, 0, None, f"  Proyecto seleccionado ✓")
+                        callback(0, 0, None, "  Proyecto seleccionado ✓")
                 time.sleep(2)
         except Exception:
             pass
