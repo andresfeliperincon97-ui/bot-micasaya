@@ -6,9 +6,6 @@ import json
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets","https://www.googleapis.com/auth/drive"]
 
 def _get_credentials_and_sheet_id(ruta_credenciales=None, sheet_id=None):
-    """Obtiene credenciales desde st.secrets, variables de entorno, o archivo local."""
-    
-    # 1. Intentar st.secrets (Streamlit Cloud)
     try:
         import streamlit as st
         if "gcp_service_account" in st.secrets:
@@ -20,7 +17,6 @@ def _get_credentials_and_sheet_id(ruta_credenciales=None, sheet_id=None):
     except Exception:
         pass
 
-    # 2. Intentar variables de entorno (Railway)
     gcp_env = os.environ.get("GCP_SERVICE_ACCOUNT")
     if gcp_env:
         try:
@@ -32,14 +28,13 @@ def _get_credentials_and_sheet_id(ruta_credenciales=None, sheet_id=None):
         except Exception as e:
             raise Exception(f"Error leyendo GCP_SERVICE_ACCOUNT desde env: {e}")
 
-    # 3. Archivo local
     if ruta_credenciales and os.path.exists(ruta_credenciales):
         creds = Credentials.from_service_account_file(ruta_credenciales, scopes=SCOPES)
         if not sheet_id:
             sheet_id = os.environ.get("SPREADSHEET_ID", "")
         return creds, sheet_id
 
-    raise Exception("No se encontraron credenciales de Google. Configura GCP_SERVICE_ACCOUNT como variable de entorno.")
+    raise Exception("No se encontraron credenciales de Google.")
 
 def conectar_sheets(ruta_credenciales=None, sheet_id=None):
     creds, sheet_id = _get_credentials_and_sheet_id(ruta_credenciales, sheet_id)
@@ -57,15 +52,16 @@ def leer_cedulas(workbook):
             cedulas.append({"cedula": fila[1].strip(), "nombre": fila[2].strip() if len(fila) > 2 else ""})
     return cedulas
 
-def leer_marcadas_para_pago(workbook):
+def leer_aplicados_sin_cobertura(workbook):
+    """Lee cédulas con estado APLICADO SIN COBERTURA pendientes de cobro."""
     hoja = workbook.worksheet("Resultados")
     datos = hoja.get_all_values()
-    marcadas = []
+    pendientes = []
     for i, fila in enumerate(datos[4:], 5):
-        if len(fila) >= 3 and "MARCADO PARA PAGO" in fila[2].upper():
+        if len(fila) >= 3 and "APLICADO SIN COBERTURA" in fila[2].upper():
             cobro = fila[7].strip().upper() if len(fila) > 7 else ""
             if cobro != "SI":
-                marcadas.append({
+                pendientes.append({
                     "fila_sheets": i,
                     "cedula": fila[0].strip(),
                     "nombre": fila[1].strip(),
@@ -76,7 +72,11 @@ def leer_marcadas_para_pago(workbook):
                     "tipo_vivienda": fila[6].strip() if len(fila) > 6 else "",
                     "miembros": [{"cedula_miembro": fila[0].strip(), "tipo_doc": "CEDULA"}],
                 })
-    return marcadas
+    return pendientes
+
+# Mantener compatibilidad con nombre anterior
+def leer_marcadas_para_pago(workbook):
+    return leer_aplicados_sin_cobertura(workbook)
 
 def escribir_resultado(workbook, idx, resultado):
     hoja = workbook.worksheet("Resultados")
