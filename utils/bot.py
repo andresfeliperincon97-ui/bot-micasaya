@@ -1,7 +1,7 @@
 """
 utils/bot.py
 - Fase 1: Consulta Mi Casa Ya usando HTTP requests (sin navegador)
-- Fase 2: Marca cobros en TransUnion usando Playwright
+- Fase 2: Marca cobros en TransUnion usando Playwright (navegador headless)
 """
 
 import requests
@@ -157,15 +157,129 @@ def ejecutar_bot_sync(cedulas, config, callback=None):
     return resultados
 
 
-# ─── FASE 2: Playwright ───────────────────────────────────────────────────────
+# ─── FASE 2: TransUnion via HTTP + Playwright ─────────────────────────────────
+
+def login_transunion_http(usuario, password, callback=None):
+    """
+    Hace login en TransUnion usando HTTP requests puros.
+    Devuelve la session de requests si el login es exitoso, None si falla.
+    """
+    session = requests.Session()
+    session.headers.update({
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "es-CO,es;q=0.9,en;q=0.8",
+        "Accept-Encoding": "gzip, deflate, br",
+        "Connection": "keep-alive",
+    })
+
+    # Paso 1: GET a la URL de login para obtener el _csrf token
+    login_url = (
+        f"{TRANSUNION_BASE}/nidp/idff/sso?id=MiPortafolioContract"
+        f"&sid=0&option=credential&sid=0"
+        f"&target=https%3A%2F%2Fmiportafolio.transunion.co%2Fcifin"
+    )
+
+    if callback:
+        callback(0, 0, None, "Obteniendo token CSRF de TransUnion...")
+
+    try:
+        resp = session.get(login_url, timeout=30, allow_redirects=True)
+        resp.raise_for_status()
+    except Exception as e:
+        if callback:
+            callback(0, 0, None, f"ERROR: No se pudo cargar página de login: {e}")
+        return None
+
+    # Extraer _csrf del HTML
+    soup = BeautifulSoup(resp.text, "html.parser")
+    csrf_input = soup.find("input", {"name": "_csrf"})
+    csrf_token = csrf_input.get("value", "") if csrf_input else ""
+
+    # También buscar en meta tags
+    if not csrf_token:
+        csrf_meta = soup.find("meta", {"name": "_csrf"})
+        if csrf_meta:
+            csrf_token = csrf_meta.get("content", "")
+
+    # También puede venir en cookie XSRF-TOKEN
+    if not csrf_token:
+        csrf_token = session.cookies.get("XSRF-TOKEN", "")
+
+    if callback:
+        callback(0, 0, None, f"Token CSRF obtenido: {'Sí' if csrf_token else 'No encontrado, intentando sin él'}")
+
+    # Paso 2: POST con credenciales al endpoint de login
+    post_url = f"{TRANSUNION_BASE}/sso-auth-server/login"
+    post_data = {
+        "username": usuario,
+        "password": password,
+    }
+    if csrf_token:
+        post_data["_csrf"] = csrf_token
+
+    post_headers = {
+        "Content-Type": "application/x-www-form-urlencoded",
+        "Referer": resp.url,
+        "Origin": TRANSUNION_BASE,
+    }
+
+    if callback:
+        callback(0, 0, None, "Enviando credenciales a TransUnion...")
+
+    try:
+        resp_login = session.post(
+            post_url,
+            data=post_data,
+            headers=post_headers,
+            timeout=30,
+            allow_redirects=True
+        )
+        final_url = resp_login.url
+        if callback:
+            callback(0, 0, None, f"URL tras login: {final_url}")
+
+        login_exitoso = (
+            "cifin" in final_url or
+            "welcome" in final_url or
+            ("login" not in final_url and "nidp" not in final_url and "credential" not in final_url)
+        )
+
+        if login_exitoso:
+            if callback:
+                callback(0, 0, None, "✓ Login HTTP exitoso en TransUnion")
+            return session
+        else:
+            if callback:
+                callback(0, 0, None, f"ERROR: Login falló. URL final: {final_url}")
+            return None
+
+    except Exception as e:
+        if callback:
+            callback(0, 0, None, f"ERROR en POST de login: {e}")
+        return None
+
+
+def cerrar_sesion_transunion_http(session, callback=None):
+    """Cierra sesión en TransUnion via HTTP."""
+    try:
+        session.get(f"{TRANSUNION_BASE}/AGLogout", timeout=10)
+        if callback:
+            callback(0, 0, None, "Sesión cerrada en TransUnion ✓")
+    except Exception:
+        try:
+            session.get(f"{TRANSUNION_BASE}/nidp/app/logout", timeout=10)
+            if callback:
+                callback(0, 0, None, "Sesión cerrada en TransUnion ✓")
+        except Exception:
+            pass
+
 
 def cerrar_sesion_transunion(page, callback=None):
-    """Cierra sesión en TransUnion para liberar la sesión."""
+    """Cierra sesión en TransUnion via Playwright (fallback)."""
     try:
-        # URL directa de logout que usa TransUnion
         page.goto(f"{TRANSUNION_BASE}/AGLogout", timeout=10000)
         time.sleep(2)
-        # Aceptar popup si aparece
         try:
             page.click("button:has-text('Aceptar')", timeout=3000)
             time.sleep(1)
@@ -181,6 +295,7 @@ def cerrar_sesion_transunion(page, callback=None):
                 callback(0, 0, None, "Sesión cerrada en TransUnion ✓")
         except Exception:
             pass
+
 
 def ejecutar_fase2_desde_sheets(marcadas, config, callback=None):
     from playwright.sync_api import sync_playwright
@@ -212,51 +327,129 @@ def ejecutar_fase2_desde_sheets(marcadas, config, callback=None):
             if callback:
                 callback(0, len(marcadas), None, "Iniciando sesión en TransUnion...")
 
-            login_url = f"{TRANSUNION_BASE}/nidp/idff/sso?id=MiPortafolioContract&sid=0&option=credential&sid=0&target=https%3A%2F%2Fmiportafolio.transunion.co%2Fcifin"
+            # ── Paso 1: Cargar página de login para obtener cookies y CSRF ──
+            login_url = (
+                f"{TRANSUNION_BASE}/nidp/idff/sso?id=MiPortafolioContract"
+                f"&sid=0&option=credential&sid=0"
+                f"&target=https%3A%2F%2Fmiportafolio.transunion.co%2Fcifin"
+            )
             page.goto(login_url, timeout=30000)
             page.wait_for_load_state("networkidle", timeout=15000)
             time.sleep(2)
 
-            # Llenar credenciales
-            page.wait_for_selector("input[type='text'], input[placeholder='Usuario']", timeout=15000)
-            page.fill("input[type='text']", usuario)
-            time.sleep(0.5)
-            page.fill("input[type='password']", password)
-            time.sleep(0.5)
+            # ── Paso 2: Extraer CSRF token del DOM ──
+            csrf_token = ""
+            try:
+                csrf_token = page.eval_on_selector(
+                    "input[name='_csrf']", "el => el.value"
+                )
+            except Exception:
+                pass
 
-            # Clic en botón de login
-            clicked = False
-            for selector in [
-                "button:has-text('Iniciar sesión')",
-                "button:has-text('Iniciar')",
-                "button[type='submit']",
-                "input[type='submit']",
-                ".btn-primary",
-                "button"
-            ]:
+            if not csrf_token:
                 try:
-                    page.click(selector, timeout=3000)
-                    clicked = True
-                    break
+                    csrf_token = page.evaluate(
+                        "() => document.querySelector('meta[name=\"_csrf\"]')?.content || ''"
+                    )
                 except Exception:
-                    continue
+                    pass
 
-            if not clicked:
-                if callback:
-                    callback(0, len(marcadas), None, "ERROR: No se encontró el botón de login")
-                return resultados
+            if not csrf_token:
+                try:
+                    csrf_token = page.evaluate(
+                        "() => document.cookie.split(';').find(c => c.trim().startsWith('XSRF-TOKEN='))?.split('=')[1] || ''"
+                    )
+                except Exception:
+                    pass
 
-            # Esperar redirección
-            time.sleep(6)
+            if callback:
+                callback(0, len(marcadas), None, f"CSRF obtenido: {'Sí' if csrf_token else 'No, continuando sin él'}")
+
+            # ── Paso 3: Obtener cookies actuales de Playwright ──
+            cookies = context.cookies()
+            cookie_header = "; ".join([f"{c['name']}={c['value']}" for c in cookies])
+
+            # ── Paso 4: POST directo al endpoint de login ──
+            post_data = f"username={requests.utils.quote(str(usuario))}&password={requests.utils.quote(str(password))}"
+            if csrf_token:
+                post_data += f"&_csrf={requests.utils.quote(csrf_token)}"
+
+            current_url = page.url
+            response = page.request.post(
+                f"{TRANSUNION_BASE}/sso-auth-server/login",
+                headers={
+                    "Content-Type": "application/x-www-form-urlencoded",
+                    "Referer": current_url,
+                    "Origin": TRANSUNION_BASE,
+                },
+                data=post_data,
+            )
+
+            time.sleep(3)
+
+            # Navegar a welcome para verificar sesión
+            page.goto(f"{TRANSUNION_BASE}/cifin/welcome", timeout=20000)
+            page.wait_for_load_state("networkidle", timeout=10000)
+            time.sleep(2)
+
             current_url = page.url
             if callback:
                 callback(0, len(marcadas), None, f"URL tras login: {current_url}")
 
             login_exitoso = (
-                "cifin" in current_url or
                 "welcome" in current_url or
-                ("credential" not in current_url and "login" not in current_url and "nidp" not in current_url)
-            )
+                "cifin" in current_url
+            ) and "login" not in current_url and "nidp" not in current_url
+
+            if not login_exitoso:
+                # ── Fallback: intentar llenando el formulario directamente ──
+                if callback:
+                    callback(0, len(marcadas), None, "Intentando login con formulario...")
+
+                page.goto(login_url, timeout=30000)
+                page.wait_for_load_state("networkidle", timeout=15000)
+                time.sleep(2)
+
+                # Llenar usuario
+                try:
+                    page.wait_for_selector("input[name='username'], input[placeholder='Usuario'], input[type='text']", timeout=10000)
+                    for sel in ["input[name='username']", "input[placeholder='Usuario']", "input[type='text']"]:
+                        try:
+                            page.fill(sel, usuario)
+                            break
+                        except Exception:
+                            continue
+                except Exception:
+                    pass
+
+                time.sleep(0.5)
+
+                # Llenar password
+                try:
+                    for sel in ["input[name='password']", "input[placeholder='Contraseña']", "input[type='password']"]:
+                        try:
+                            page.fill(sel, password)
+                            break
+                        except Exception:
+                            continue
+                except Exception:
+                    pass
+
+                time.sleep(0.5)
+
+                # Enviar con Enter (más confiable que buscar botón)
+                page.keyboard.press("Enter")
+                time.sleep(6)
+
+                current_url = page.url
+                if callback:
+                    callback(0, len(marcadas), None, f"URL tras formulario: {current_url}")
+
+                login_exitoso = (
+                    "cifin" in current_url or
+                    "welcome" in current_url or
+                    ("login" not in current_url and "nidp" not in current_url and "credential" not in current_url)
+                )
 
             if not login_exitoso:
                 if callback:
@@ -264,7 +457,7 @@ def ejecutar_fase2_desde_sheets(marcadas, config, callback=None):
                 return resultados
 
             if callback:
-                callback(0, len(marcadas), None, f"Sesión iniciada. Procesando {len(marcadas)} cédulas...")
+                callback(0, len(marcadas), None, f"✓ Sesión iniciada. Procesando {len(marcadas)} cédulas...")
 
             for idx, datos in enumerate(marcadas):
                 if callback:
@@ -286,11 +479,11 @@ def ejecutar_fase2_desde_sheets(marcadas, config, callback=None):
             if callback:
                 callback(0, len(marcadas), None, f"ERROR: {str(e)[:150]}")
         finally:
-            # Siempre cerrar sesión antes de cerrar el browser
             cerrar_sesion_transunion(page, callback)
             browser.close()
 
     return resultados
+
 
 def marcar_cobro_playwright(page, datos, callback=None):
     resultado_cobro = {"cobro_aplicado": False, "mensaje_cobro": "", "error_cobro": ""}
