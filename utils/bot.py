@@ -1,7 +1,7 @@
 """
 utils/bot.py
 - Fase 1: Consulta Mi Casa Ya usando HTTP requests (sin navegador)
-- Fase 2: Marca cobros en TransUnion usando Playwright (navegador headless)
+- Fase 2: Marca cobros en TransUnion usando Playwright
 """
 
 import requests
@@ -157,126 +157,10 @@ def ejecutar_bot_sync(cedulas, config, callback=None):
     return resultados
 
 
-# ─── FASE 2: TransUnion via HTTP + Playwright ─────────────────────────────────
-
-def login_transunion_http(usuario, password, callback=None):
-    """
-    Hace login en TransUnion usando HTTP requests puros.
-    Devuelve la session de requests si el login es exitoso, None si falla.
-    """
-    session = requests.Session()
-    session.headers.update({
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36",
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        "Accept-Language": "es-CO,es;q=0.9,en;q=0.8",
-        "Accept-Encoding": "gzip, deflate, br",
-        "Connection": "keep-alive",
-    })
-
-    # Paso 1: GET a la URL de login para obtener el _csrf token
-    login_url = (
-        f"{TRANSUNION_BASE}/nidp/idff/sso?id=MiPortafolioContract"
-        f"&sid=0&option=credential&sid=0"
-        f"&target=https%3A%2F%2Fmiportafolio.transunion.co%2Fcifin"
-    )
-
-    if callback:
-        callback(0, 0, None, "Obteniendo token CSRF de TransUnion...")
-
-    try:
-        resp = session.get(login_url, timeout=30, allow_redirects=True)
-        resp.raise_for_status()
-    except Exception as e:
-        if callback:
-            callback(0, 0, None, f"ERROR: No se pudo cargar página de login: {e}")
-        return None
-
-    # Extraer _csrf del HTML
-    soup = BeautifulSoup(resp.text, "html.parser")
-    csrf_input = soup.find("input", {"name": "_csrf"})
-    csrf_token = csrf_input.get("value", "") if csrf_input else ""
-
-    # También buscar en meta tags
-    if not csrf_token:
-        csrf_meta = soup.find("meta", {"name": "_csrf"})
-        if csrf_meta:
-            csrf_token = csrf_meta.get("content", "")
-
-    # También puede venir en cookie XSRF-TOKEN
-    if not csrf_token:
-        csrf_token = session.cookies.get("XSRF-TOKEN", "")
-
-    if callback:
-        callback(0, 0, None, f"Token CSRF obtenido: {'Sí' if csrf_token else 'No encontrado, intentando sin él'}")
-
-    # Paso 2: POST con credenciales al endpoint de login
-    post_url = f"{TRANSUNION_BASE}/sso-auth-server/login"
-    post_data = {
-        "username": usuario,
-        "password": password,
-    }
-    if csrf_token:
-        post_data["_csrf"] = csrf_token
-
-    post_headers = {
-        "Content-Type": "application/x-www-form-urlencoded",
-        "Referer": resp.url,
-        "Origin": TRANSUNION_BASE,
-    }
-
-    if callback:
-        callback(0, 0, None, "Enviando credenciales a TransUnion...")
-
-    try:
-        resp_login = session.post(
-            post_url,
-            data=post_data,
-            headers=post_headers,
-            timeout=30,
-            allow_redirects=True
-        )
-        final_url = resp_login.url
-        if callback:
-            callback(0, 0, None, f"URL tras login: {final_url}")
-
-        login_exitoso = (
-            "cifin" in final_url or
-            "welcome" in final_url or
-            ("login" not in final_url and "nidp" not in final_url and "credential" not in final_url)
-        )
-
-        if login_exitoso:
-            if callback:
-                callback(0, 0, None, "✓ Login HTTP exitoso en TransUnion")
-            return session
-        else:
-            if callback:
-                callback(0, 0, None, f"ERROR: Login falló. URL final: {final_url}")
-            return None
-
-    except Exception as e:
-        if callback:
-            callback(0, 0, None, f"ERROR en POST de login: {e}")
-        return None
-
-
-def cerrar_sesion_transunion_http(session, callback=None):
-    """Cierra sesión en TransUnion via HTTP."""
-    try:
-        session.get(f"{TRANSUNION_BASE}/AGLogout", timeout=10)
-        if callback:
-            callback(0, 0, None, "Sesión cerrada en TransUnion ✓")
-    except Exception:
-        try:
-            session.get(f"{TRANSUNION_BASE}/nidp/app/logout", timeout=10)
-            if callback:
-                callback(0, 0, None, "Sesión cerrada en TransUnion ✓")
-        except Exception:
-            pass
-
+# ─── FASE 2: Playwright ───────────────────────────────────────────────────────
 
 def cerrar_sesion_transunion(page, callback=None):
-    """Cierra sesión en TransUnion via Playwright (fallback)."""
+    """Cierra sesión en TransUnion."""
     try:
         page.goto(f"{TRANSUNION_BASE}/AGLogout", timeout=10000)
         time.sleep(2)
@@ -327,7 +211,6 @@ def ejecutar_fase2_desde_sheets(marcadas, config, callback=None):
             if callback:
                 callback(0, len(marcadas), None, "Iniciando sesión en TransUnion...")
 
-            # ── Paso 1: Cargar página de login para obtener cookies y CSRF ──
             login_url = (
                 f"{TRANSUNION_BASE}/nidp/idff/sso?id=MiPortafolioContract"
                 f"&sid=0&option=credential&sid=0"
@@ -337,15 +220,12 @@ def ejecutar_fase2_desde_sheets(marcadas, config, callback=None):
             page.wait_for_load_state("networkidle", timeout=15000)
             time.sleep(2)
 
-            # ── Paso 2: Extraer CSRF token del DOM ──
+            # Extraer CSRF
             csrf_token = ""
             try:
-                csrf_token = page.eval_on_selector(
-                    "input[name='_csrf']", "el => el.value"
-                )
+                csrf_token = page.eval_on_selector("input[name='_csrf']", "el => el.value")
             except Exception:
                 pass
-
             if not csrf_token:
                 try:
                     csrf_token = page.evaluate(
@@ -354,106 +234,75 @@ def ejecutar_fase2_desde_sheets(marcadas, config, callback=None):
                 except Exception:
                     pass
 
-            if not csrf_token:
-                try:
-                    csrf_token = page.evaluate(
-                        "() => document.cookie.split(';').find(c => c.trim().startsWith('XSRF-TOKEN='))?.split('=')[1] || ''"
-                    )
-                except Exception:
-                    pass
-
             if callback:
-                callback(0, len(marcadas), None, f"CSRF obtenido: {'Sí' if csrf_token else 'No, continuando sin él'}")
+                callback(0, len(marcadas), None, f"CSRF: {'obtenido' if csrf_token else 'no encontrado'}")
 
-            # ── Paso 3: Obtener cookies actuales de Playwright ──
-            cookies = context.cookies()
-            cookie_header = "; ".join([f"{c['name']}={c['value']}" for c in cookies])
+            # Intentar POST directo primero
+            login_exitoso = False
+            try:
+                post_data = f"username={requests.utils.quote(str(usuario))}&password={requests.utils.quote(str(password))}"
+                if csrf_token:
+                    post_data += f"&_csrf={requests.utils.quote(csrf_token)}"
 
-            # ── Paso 4: POST directo al endpoint de login ──
-            post_data = f"username={requests.utils.quote(str(usuario))}&password={requests.utils.quote(str(password))}"
-            if csrf_token:
-                post_data += f"&_csrf={requests.utils.quote(csrf_token)}"
+                page.request.post(
+                    f"{TRANSUNION_BASE}/sso-auth-server/login",
+                    headers={
+                        "Content-Type": "application/x-www-form-urlencoded",
+                        "Referer": page.url,
+                        "Origin": TRANSUNION_BASE,
+                    },
+                    data=post_data,
+                )
+                time.sleep(2)
+                page.goto(f"{TRANSUNION_BASE}/cifin/welcome", timeout=20000)
+                page.wait_for_load_state("networkidle", timeout=10000)
+                time.sleep(2)
 
-            current_url = page.url
-            response = page.request.post(
-                f"{TRANSUNION_BASE}/sso-auth-server/login",
-                headers={
-                    "Content-Type": "application/x-www-form-urlencoded",
-                    "Referer": current_url,
-                    "Origin": TRANSUNION_BASE,
-                },
-                data=post_data,
-            )
-
-            time.sleep(3)
-
-            # Navegar a welcome para verificar sesión
-            page.goto(f"{TRANSUNION_BASE}/cifin/welcome", timeout=20000)
-            page.wait_for_load_state("networkidle", timeout=10000)
-            time.sleep(2)
-
-            current_url = page.url
-            if callback:
-                callback(0, len(marcadas), None, f"URL tras login: {current_url}")
-
-            login_exitoso = (
-                "welcome" in current_url or
-                "cifin" in current_url
-            ) and "login" not in current_url and "nidp" not in current_url
-
-            if not login_exitoso:
-                # ── Fallback: intentar llenando el formulario directamente ──
+                url_actual = page.url
+                login_exitoso = "welcome" in url_actual and "login" not in url_actual and "nidp" not in url_actual
                 if callback:
-                    callback(0, len(marcadas), None, "Intentando login con formulario...")
+                    callback(0, len(marcadas), None, f"POST directo → {url_actual}")
+            except Exception as e:
+                if callback:
+                    callback(0, len(marcadas), None, f"POST falló: {str(e)[:60]}, intentando formulario...")
 
+            # Fallback: formulario + Enter
+            if not login_exitoso:
                 page.goto(login_url, timeout=30000)
                 page.wait_for_load_state("networkidle", timeout=15000)
                 time.sleep(2)
 
-                # Llenar usuario
-                try:
-                    page.wait_for_selector("input[name='username'], input[placeholder='Usuario'], input[type='text']", timeout=10000)
-                    for sel in ["input[name='username']", "input[placeholder='Usuario']", "input[type='text']"]:
-                        try:
-                            page.fill(sel, usuario)
-                            break
-                        except Exception:
-                            continue
-                except Exception:
-                    pass
+                for sel in ["input[name='username']", "input[placeholder='Usuario']", "input[type='text']"]:
+                    try:
+                        page.wait_for_selector(sel, timeout=5000)
+                        page.fill(sel, usuario)
+                        break
+                    except Exception:
+                        continue
 
                 time.sleep(0.5)
-
-                # Llenar password
-                try:
-                    for sel in ["input[name='password']", "input[placeholder='Contraseña']", "input[type='password']"]:
-                        try:
-                            page.fill(sel, password)
-                            break
-                        except Exception:
-                            continue
-                except Exception:
-                    pass
+                for sel in ["input[name='password']", "input[placeholder='Contraseña']", "input[type='password']"]:
+                    try:
+                        page.fill(sel, password)
+                        break
+                    except Exception:
+                        continue
 
                 time.sleep(0.5)
-
-                # Enviar con Enter (más confiable que buscar botón)
                 page.keyboard.press("Enter")
-                time.sleep(6)
+                time.sleep(8)
 
-                current_url = page.url
+                url_actual = page.url
                 if callback:
-                    callback(0, len(marcadas), None, f"URL tras formulario: {current_url}")
+                    callback(0, len(marcadas), None, f"Formulario → {url_actual}")
 
                 login_exitoso = (
-                    "cifin" in current_url or
-                    "welcome" in current_url or
-                    ("login" not in current_url and "nidp" not in current_url and "credential" not in current_url)
-                )
+                    "cifin" in url_actual or "welcome" in url_actual
+                ) and "login" not in url_actual and "nidp" not in url_actual
 
             if not login_exitoso:
                 if callback:
-                    callback(0, len(marcadas), None, f"ERROR: Login fallido. URL: {current_url}")
+                    callback(0, len(marcadas), None, f"ERROR: Login fallido. URL: {page.url}")
                 return resultados
 
             if callback:
@@ -491,97 +340,184 @@ def marcar_cobro_playwright(page, datos, callback=None):
         depto = datos.get("departamento", "").upper().strip()
         muni = datos.get("municipio", "").upper().strip()
         nombre_proyecto = datos.get("nombre_proyecto", "").upper().strip()
+        cedula = datos.get("cedula", "").strip()
 
-        page.goto(f"{TRANSUNION_BASE}/cifin/MiCasaYa/solicitarDesembolso/faces/pagos?destino=solicitarDesembolso", timeout=15000)
+        if callback:
+            callback(0, 0, None, f"  Navegando al formulario...")
+
+        # Ir a welcome primero, luego al formulario
+        page.goto(f"{TRANSUNION_BASE}/cifin/welcome", timeout=20000)
         page.wait_for_load_state("networkidle", timeout=10000)
-        time.sleep(2)
+        time.sleep(1)
 
+        # Intentar clic en MI CASA YA
+        try:
+            page.click("text=MI CASA YA", timeout=4000)
+            page.wait_for_load_state("networkidle", timeout=8000)
+            time.sleep(1)
+        except Exception:
+            pass
+
+        # Ir al formulario de cobro
+        page.goto(
+            f"{TRANSUNION_BASE}/cifin/MiCasaYa/solicitarDesembolso/faces/pagos?destino=solicitarDesembolso",
+            timeout=20000
+        )
+        page.wait_for_load_state("networkidle", timeout=10000)
+        time.sleep(3)
+
+        if "login" in page.url or "nidp" in page.url:
+            resultado_cobro["error_cobro"] = "Sesión expirada"
+            return resultado_cobro
+
+        if callback:
+            callback(0, 0, None, f"  Depto: {depto} | Muni: {muni}")
+
+        # ── Departamento ──
         try:
             page.wait_for_selector("select", timeout=10000)
             selects = page.query_selector_all("select")
             if selects:
                 selects[0].select_option(label=depto)
-                time.sleep(1)
+                time.sleep(2)
         except Exception as e:
-            resultado_cobro["error_cobro"] = f"Error seleccionando departamento: {str(e)[:100]}"
+            resultado_cobro["error_cobro"] = f"Error depto: {str(e)[:80]}"
             return resultado_cobro
 
+        # ── Municipio ──
         try:
-            time.sleep(2)
             selects = page.query_selector_all("select")
             if len(selects) > 1:
                 selects[1].select_option(label=muni)
-                time.sleep(1)
-        except Exception:
-            pass
+                time.sleep(2)
+        except Exception as e:
+            resultado_cobro["error_cobro"] = f"Error municipio: {str(e)[:80]}"
+            return resultado_cobro
 
+        # ── Proyecto ──
         try:
-            time.sleep(2)
+            time.sleep(1)
             selects = page.query_selector_all("select")
             if len(selects) > 2:
                 opciones = selects[2].query_selector_all("option")
                 opcion_elegida = None
                 partes = [p.strip() for p in nombre_proyecto.split(" - ") if len(p.strip()) > 3]
                 for op in opciones:
-                    texto = op.inner_text().upper()
+                    texto = op.inner_text().upper().strip()
                     if all(p in texto for p in partes):
                         opcion_elegida = op.get_attribute("value")
                         break
+                if not opcion_elegida:
+                    for op in opciones:
+                        val = op.get_attribute("value") or ""
+                        if val and "---" not in val and val.strip():
+                            opcion_elegida = val
+                            break
                 if opcion_elegida:
                     selects[2].select_option(value=opcion_elegida)
-                elif len(opciones) > 1:
-                    selects[2].select_option(index=1)
+                    if callback:
+                        callback(0, 0, None, f"  Proyecto seleccionado ✓")
                 time.sleep(2)
         except Exception:
             pass
 
-        miembros = datos.get("miembros", [{"cedula_miembro": datos.get("cedula", ""), "tipo_doc": "CEDULA"}])
+        # ── Tipo Identificación: CEDULA ──
+        try:
+            selects = page.query_selector_all("select")
+            for s in selects:
+                opciones_s = s.query_selector_all("option")
+                textos = [o.inner_text().upper() for o in opciones_s]
+                if any("CEDULA" in t or "CÉDULA" in t for t in textos):
+                    for op in opciones_s:
+                        if "CEDULA" in op.inner_text().upper() or "CÉDULA" in op.inner_text().upper():
+                            s.select_option(value=op.get_attribute("value"))
+                            break
+                    break
+            time.sleep(0.5)
+        except Exception:
+            pass
+
+        # ── Número de identificación ──
+        miembros = datos.get("miembros", [])
+        if not miembros:
+            miembros = [{"cedula_miembro": cedula, "tipo_doc": "CEDULA"}]
+
         for miembro in miembros:
             ced_m = miembro.get("cedula_miembro", "").strip()
             if not ced_m:
                 continue
+
+            if callback:
+                callback(0, 0, None, f"  Ingresando cédula: {ced_m}")
+
             try:
-                selects = page.query_selector_all("select")
-                for s in selects:
-                    opciones_texto = [o.inner_text().upper() for o in s.query_selector_all("option")]
-                    if any("CEDULA" in t for t in opciones_texto):
-                        s.select_option(index=1)
-                        break
-                time.sleep(0.5)
                 inputs = page.query_selector_all("input[type='text']:not([readonly]):not([disabled])")
                 for inp in inputs:
-                    if inp.is_visible() and inp.is_enabled():
-                        val = inp.get_attribute("value") or ""
-                        if val == "" or val.isdigit():
+                    try:
+                        if inp.is_visible() and inp.is_enabled():
+                            inp.triple_click()
                             inp.fill(ced_m)
                             break
+                    except Exception:
+                        continue
                 time.sleep(0.5)
+
+                # Clic Adicionar
                 try:
-                    page.click("text=Adicionar", timeout=3000)
+                    page.click("text=Adicionar", timeout=5000)
                     time.sleep(2)
+                    if callback:
+                        callback(0, 0, None, "  Adicionar ✓")
                 except Exception:
-                    pass
-            except Exception:
-                pass
+                    try:
+                        page.click("input[value='Adicionar']", timeout=3000)
+                        time.sleep(2)
+                    except Exception:
+                        pass
+            except Exception as e:
+                if callback:
+                    callback(0, 0, None, f"  Error cédula: {str(e)[:60]}")
 
-        try:
-            page.click("text=MARCAR PARA PAGO", timeout=5000)
-            time.sleep(4)
-        except Exception:
+        # ── MARCAR PARA PAGO ──
+        if callback:
+            callback(0, 0, None, "  Clic en MARCAR PARA PAGO...")
+
+        marcado = False
+        for selector in [
+            "text=MARCAR PARA PAGO",
+            "input[value='MARCAR PARA PAGO']",
+            "button:has-text('MARCAR PARA PAGO')",
+            "text=MARCAR",
+        ]:
             try:
-                page.click("text=MARCAR", timeout=3000)
-                time.sleep(4)
+                page.click(selector, timeout=5000)
+                marcado = True
+                time.sleep(5)
+                break
             except Exception:
-                pass
+                continue
 
-        contenido = page.content()
-        if "Cobro aplicado" in contenido:
-            if "ya fue cobrado" in contenido.lower() or "no se encuentra" in contenido.lower():
+        if not marcado:
+            resultado_cobro["error_cobro"] = "No se encontró botón MARCAR PARA PAGO"
+            return resultado_cobro
+
+        # ── Verificar resultado ──
+        contenido = page.content().upper()
+
+        if "COBRO APLICADO" in contenido or "MARCADO" in contenido or "EXITOSO" in contenido:
+            if "YA FUE COBRADO" in contenido or "NO SE ENCUENTRA" in contenido:
                 resultado_cobro["mensaje_cobro"] = "Ya cobrado o no aplica"
             else:
                 resultado_cobro["cobro_aplicado"] = True
-                resultado_cobro["mensaje_cobro"] = "Marcado exitosamente"
+                resultado_cobro["mensaje_cobro"] = "Marcado exitosamente ✓"
+                if callback:
+                    callback(0, 0, None, f"  ✓ COBRO EXITOSO para {cedula}")
+        else:
+            resultado_cobro["mensaje_cobro"] = "Resultado incierto - revisar en TransUnion"
+            if callback:
+                callback(0, 0, None, f"  ⚠ Resultado incierto para {cedula}")
 
+        # Nuevo para siguiente
         try:
             page.click("text=Nuevo", timeout=3000)
             time.sleep(1)
@@ -590,4 +526,7 @@ def marcar_cobro_playwright(page, datos, callback=None):
 
     except Exception as e:
         resultado_cobro["error_cobro"] = str(e)[:200]
+        if callback:
+            callback(0, 0, None, f"  ERROR: {str(e)[:100]}")
+
     return resultado_cobro
